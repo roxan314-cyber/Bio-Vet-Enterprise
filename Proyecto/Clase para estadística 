@@ -1,0 +1,32 @@
+public class ReporteEstadisticas {
+    private final int totalRegistros;
+    private final double valorPromedio;
+    private final double valorMaximo;
+    private final int registrosActivos;
+    private final int registrosInactivos;
+    
+    public ReporteEstadisticas(int totalRegistros, double valorPromedio, 
+                              double valorMaximo, int registrosActivos, 
+                              int registrosInactivos) {
+        this.totalRegistros = totalRegistros;
+        this.valorPromedio = valorPromedio;
+        this.valorMaximo = valorMaximo;
+        this.registrosActivos = registrosActivos;
+        this.registrosInactivos = registrosInactivos;
+    }
+    
+    // Getters
+    public int getTotalRegistros() { return totalRegistros; }
+    public double getValorPromedio() { return valorPromedio; }
+    public double getValorMaximo() { return valorMaximo; }
+    public int getRegistrosActivos() { return registrosActivos; }
+    public int getRegistrosInactivos() { return registrosInactivos; }
+    
+    @Override
+    public String toString() {
+        return String.format("Estadísticas: Total=%d, Promedio=%.2f, Máximo=%.2f, " +
+                           "Activos=%d, Inactivos=%d", 
+                           totalRegistros, valorPromedio, valorMaximo,
+                           registrosActivos, registrosInactivos);
+    }
+}
