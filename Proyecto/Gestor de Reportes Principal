@@ -1,0 +1,132 @@
+import java.sql.*;
+import java.time.LocalDateTime;
+import java.util.*;
+import java.util.stream.Collectors;
+
+public class GestorReportes {
+    
+    // Método principal para extraer datos a lista
+    public List<ReporteData> extraerReporteCompleto() throws SQLException {
+        String query = "SELECT id, nombre, valor, fecha_creacion, activo FROM reportes ORDER BY fecha_creacion DESC";
+        
+        try (Connection conn = DatabaseConfig.getConnection();
+             PreparedStatement stmt = conn.prepareStatement(query);
+             ResultSet rs = stmt.executeQuery()) {
+            
+            List<ReporteData> reportes = new ArrayList<>();
+            
+            while (rs.next()) {
+                ReporteData reporte = new ReporteData(
+                    rs.getInt("id"),
+                    rs.getString("nombre"),
+                    rs.getDouble("valor"),
+                    rs.getTimestamp("fecha_creacion").toLocalDateTime(),
+                    rs.getBoolean("activo")
+                );
+                reportes.add(reporte);
+            }
+            
+            return reportes;
+        }
+    }
+    
+    // Extraer con filtros
+    public List<ReporteData> extraerReporteFiltrado(Map<String, Object> filtros) throws SQLException {
+        StringBuilder query = new StringBuilder(
+            "SELECT id, nombre, valor, fecha_creacion, activo FROM reportes WHERE 1=1"
+        );
+        
+        List<Object> parametros = new ArrayList<>();
+        
+        if (filtros.containsKey("activo")) {
+            query.append(" AND activo = ?");
+            parametros.add(filtros.get("activo"));
+        }
+        
+        if (filtros.containsKey("valorMinimo")) {
+            query.append(" AND valor >= ?");
+            parametros.add(filtros.get("valorMinimo"));
+        }
+        
+        if (filtros.containsKey("fechaDesde")) {
+            query.append(" AND fecha_creacion >= ?");
+            parametros.add(filtros.get("fechaDesde"));
+        }
+        
+        query.append(" ORDER BY fecha_creacion DESC");
+        
+        try (Connection conn = DatabaseConfig.getConnection();
+             PreparedStatement stmt = conn.prepareStatement(query.toString())) {
+            
+            for (int i = 0; i < parametros.size(); i++) {
+                stmt.setObject(i + 1, parametros.get(i));
+            }
+            
+            try (ResultSet rs = stmt.executeQuery()) {
+                List<ReporteData> reportes = new ArrayList<>();
+                while (rs.next()) {
+                    reportes.add(new ReporteData(
+                        rs.getInt("id"),
+                        rs.getString("nombre"),
+                        rs.getDouble("valor"),
+                        rs.getTimestamp("fecha_creacion").toLocalDateTime(),
+                        rs.getBoolean("activo")
+                    ));
+                }
+                return reportes;
+            }
+        }
+    }
+    
+    // Extraer con paginación
+    public List<ReporteData> extraerReportePaginado(int pagina, int tamanioPagina) throws SQLException {
+        String query = "SELECT id, nombre, valor, fecha_creacion, activo FROM reportes " +
+                      "ORDER BY fecha_creacion DESC LIMIT ? OFFSET ?";
+        
+        int offset = (pagina - 1) * tamanioPagina;
+        
+        try (Connection conn = DatabaseConfig.getConnection();
+             PreparedStatement stmt = conn.prepareStatement(query)) {
+            
+            stmt.setInt(1, tamanioPagina);
+            stmt.setInt(2, offset);
+            
+            try (ResultSet rs = stmt.executeQuery()) {
+                List<ReporteData> reportes = new ArrayList<>();
+                while (rs.next()) {
+                    reportes.add(new ReporteData(
+                        rs.getInt("id"),
+                        rs.getString("nombre"),
+                        rs.getDouble("valor"),
+                        rs.getTimestamp("fecha_creacion").toLocalDateTime(),
+                        rs.getBoolean("activo")
+                    ));
+                }
+                return reportes;
+            }
+        }
+    }
+    
+    // Método para obtener estadísticas de los reportes
+    public ReporteEstadisticas obtenerEstadisticas(List<ReporteData> reportes) {
+        if (reportes.isEmpty()) {
+            return new ReporteEstadisticas(0, 0.0, 0.0, 0, 0);
+        }
+        
+        DoubleSummaryStatistics stats = reportes.stream()
+            .mapToDouble(ReporteData::getValor)
+            .summaryStatistics();
+        
+        long countActivos = reportes.stream()
+            .filter(ReporteData::isActivo)
+            .count();
+        
+        return new ReporteEstadisticas(
+            reportes.size(),
+            stats.getAverage(),
+            stats.getMax(),
+            (int) countActivos,
+            (int) (reportes.size() - countActivos)
+        );
+    }
+}
