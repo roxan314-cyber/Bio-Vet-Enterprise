@@ -1,0 +1,57 @@
+import java.time.LocalDateTime;
+import java.util.Objects;
+
+public class ReporteData {
+    private int id;
+    private String nombre;
+    private double valor;
+    private LocalDateTime fechaCreacion;
+    private boolean activo;
+    
+    public ReporteData(int id, String nombre, double valor, 
+                      LocalDateTime fechaCreacion, boolean activo) {
+        this.id = id;
+        this.nombre = nombre;
+        this.valor = valor;
+        this.fechaCreacion = fechaCreacion;
+        this.activo = activo;
+    }
+    
+    // Getters y Setters
+    public int getId() { return id; }
+    public void setId(int id) { this.id = id; }
+    
+    public String getNombre() { return nombre; }
+    public void setNombre(String nombre) { this.nombre = nombre; }
+    
+    public double getValor() { return valor; }
+    public void setValor(double valor) { this.valor = valor; }
+    
+    public LocalDateTime getFechaCreacion() { return fechaCreacion; }
+    public void setFechaCreacion(LocalDateTime fechaCreacion) { 
+        this.fechaCreacion = fechaCreacion; 
+    }
+    
+    public boolean isActivo() { return activo; }
+    public void setActivo(boolean activo) { this.activo = activo; }
+    
+    @Override
+    public String toString() {
+        return String.format("ReporteData{id=%d, nombre='%s', valor=%.2f, " +
+                           "fechaCreacion=%s, activo=%s}", 
+                           id, nombre, valor, fechaCreacion, activo);
+    }
+    
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) return true;
+        if (o == null || getClass() != o.getClass()) return false;
+        ReporteData that = (ReporteData) o;
+        return id == that.id;
+    }
+    
+    @Override
+    public int hashCode() {
+        return Objects.hash(id);
+    }
+}
