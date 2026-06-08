@@ -1,0 +1,616 @@
+// AdminDashboard.java
+import javax.swing.*;
+import javax.swing.table.DefaultTableModel;
+import java.awt.*;
+import java.awt.event.ActionEvent;
+import java.sql.*;
+import java.util.Vector;
+
+public class AdminDashboard extends JFrame {
+    private JTabbedPane tabbedPane;
+    private JTable tablaMySQL, tablaPostgres;
+    private DefaultTableModel modelMySQL, modelPostgres;
+    private Connection connMySQL, connPostgres;
+    private JLabel lblStatusMySQL, lblStatusPostgres;
+    
+    // Configuración de bases de datos
+    private final String MYSQL_URL = "jdbc:mysql://localhost:3306/sistema_admin";
+    private final String MYSQL_USER = "admin";
+    private final String MYSQL_PASS = "admin123";
+    
+    private final String POSTGRES_URL = "jdbc:postgresql://localhost:5432/sistema_admin";
+    private final String POSTGRES_USER = "admin";
+    private final String POSTGRES_PASS = "admin123";
+    
+    public AdminDashboard() {
+        setTitle("Panel Administrativo - Sistema Multi-Base de Datos");
+        setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+        setSize(1200, 700);
+        setLocationRelativeTo(null);
+        
+        // Conectar a bases de datos
+        conectarBasesDatos();
+        
+        // Configurar interfaz
+        initComponents();
+        
+        // Cargar datos
+        cargarDatos();
+    }
+    
+    private void conectarBasesDatos() {
+        try {
+            // Conexión MySQL
+            Class.forName("com.mysql.cj.jdbc.Driver");
+            connMySQL = DriverManager.getConnection(MYSQL_URL, MYSQL_USER, MYSQL_PASS);
+            
+            // Conexión PostgreSQL
+            Class.forName("org.postgresql.Driver");
+            connPostgres = DriverManager.getConnection(POSTGRES_URL, POSTGRES_USER, POSTGRES_PASS);
+            
+        } catch (ClassNotFoundException | SQLException e) {
+            JOptionPane.showMessageDialog(this, "Error de conexión: " + e.getMessage(), 
+                                        "Error", JOptionPane.ERROR_MESSAGE);
+        }
+    }
+    
+    private void initComponents() {
+        setLayout(new BorderLayout(10, 10));
+        
+        // Panel superior con botones de acción general
+        JPanel panelSuperior = crearPanelSuperior();
+        add(panelSuperior, BorderLayout.NORTH);
+        
+        // Panel central con pestañas para diferentes bases de datos
+        tabbedPane = new JTabbedPane();
+        tabbedPane.setFont(new Font("Arial", Font.BOLD, 12));
+        
+        // Pestaña MySQL
+        JPanel panelMySQL = crearPanelMySQL();
+        tabbedPane.addTab("Base de Datos MySQL", panelMySQL);
+        
+        // Pestaña PostgreSQL
+        JPanel panelPostgres = crearPanelPostgres();
+        tabbedPane.addTab("Base de Datos PostgreSQL", panelPostgres);
+        
+        // Pestaña de Reportes
+        JPanel panelReportes = crearPanelReportes();
+        tabbedPane.addTab("Reportes y Estadísticas", panelReportes);
+        
+        add(tabbedPane, BorderLayout.CENTER);
+        
+        // Panel de estado en la parte inferior
+        JPanel panelEstado = crearPanelEstado();
+        add(panelEstado, BorderLayout.SOUTH);
+    }
+    
+    private JPanel crearPanelSuperior() {
+        JPanel panel = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 10));
+        panel.setBorder(BorderFactory.createTitledBorder("Acciones Rápidas"));
+        panel.setBackground(new Color(240, 248, 255));
+        
+        JButton btnActualizarTodos = new JButton("Actualizar Todos los Datos");
+        btnActualizarTodos.setBackground(new Color(100, 149, 237));
+        btnActualizarTodos.setForeground(Color.WHITE);
+        btnActualizarTodos.addActionListener(e -> cargarDatos());
+        
+        JButton btnExportarReporte = new JButton("Exportar Reporte General");
+        btnExportarReporte.setBackground(new Color(60, 179, 113));
+        btnExportarReporte.setForeground(Color.WHITE);
+        btnExportarReporte.addActionListener(e -> exportarReporte());
+        
+        JButton btnLimpiarLogs = new JButton("Limpiar Registros Antiguos");
+        btnLimpiarLogs.setBackground(new Color(255, 99, 71));
+        btnLimpiarLogs.setForeground(Color.WHITE);
+        btnLimpiarLogs.addActionListener(e -> limpiarRegistros());
+        
+        JButton btnConfiguracion = new JButton("Configuración");
+        btnConfiguracion.setBackground(new Color(128, 128, 128));
+        btnConfiguracion.setForeground(Color.WHITE);
+        btnConfiguracion.addActionListener(e -> mostrarConfiguracion());
+        
+        panel.add(btnActualizarTodos);
+        panel.add(btnExportarReporte);
+        panel.add(btnLimpiarLogs);
+        panel.add(btnConfiguracion);
+        
+        return panel;
+    }
+    
+    private JPanel crearPanelMySQL() {
+        JPanel panel = new JPanel(new BorderLayout(5, 5));
+        panel.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
+        
+        // Panel de botones específicos para MySQL
+        JPanel panelBotones = new JPanel(new FlowLayout(FlowLayout.LEFT));
+        panelBotones.setBackground(new Color(240, 248, 255));
+        
+        JButton btnAgregarMySQL = new JButton("Agregar Registro");
+        btnAgregarMySQL.addActionListener(e -> agregarRegistroMySQL());
+        
+        JButton btnEditarMySQL = new JButton("Editar Registro");
+        btnEditarMySQL.addActionListener(e -> editarRegistroMySQL());
+        
+        JButton btnEliminarMySQL = new JButton("Eliminar Registro");
+        btnEliminarMySQL.addActionListener(e -> eliminarRegistroMySQL());
+        
+        JButton btnRefrescarMySQL = new JButton("Refrescar");
+        btnRefrescarMySQL.addActionListener(e -> cargarDatosMySQL());
+        
+        panelBotones.add(btnAgregarMySQL);
+        panelBotones.add(btnEditarMySQL);
+        panelBotones.add(btnEliminarMySQL);
+        panelBotones.add(btnRefrescarMySQL);
+        
+        // Tabla para MySQL
+        modelMySQL = new DefaultTableModel() {
+            @Override
+            public boolean isCellEditable(int row, int column) {
+                return false;
+            }
+        };
+        tablaMySQL = new JTable(modelMySQL);
+        tablaMySQL.setFillsViewportHeight(true);
+        tablaMySQL.setRowHeight(25);
+        tablaMySQL.setFont(new Font("Arial", Font.PLAIN, 12));
+        tablaMySQL.getTableHeader().setFont(new Font("Arial", Font.BOLD, 12));
+        tablaMySQL.getTableHeader().setBackground(new Color(100, 149, 237));
+        tablaMySQL.getTableHeader().setForeground(Color.WHITE);
+        
+        JScrollPane scrollPane = new JScrollPane(tablaMySQL);
+        
+        panel.add(panelBotones, BorderLayout.NORTH);
+        panel.add(scrollPane, BorderLayout.CENTER);
+        
+        return panel;
+    }
+    
+    private JPanel crearPanelPostgres() {
+        JPanel panel = new JPanel(new BorderLayout(5, 5));
+        panel.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
+        
+        JPanel panelBotones = new JPanel(new FlowLayout(FlowLayout.LEFT));
+        panelBotones.setBackground(new Color(255, 248, 225));
+        
+        JButton btnAgregarPG = new JButton("Agregar Registro");
+        btnAgregarPG.addActionListener(e -> agregarRegistroPostgres());
+        
+        JButton btnEditarPG = new JButton("Editar Registro");
+        btnEditarPG.addActionListener(e -> editarRegistroPostgres());
+        
+        JButton btnEliminarPG = new JButton("Eliminar Registro");
+        btnEliminarPG.addActionListener(e -> eliminarRegistroPostgres());
+        
+        JButton btnRefrescarPG = new JButton("Refrescar");
+        btnRefrescarPG.addActionListener(e -> cargarDatosPostgres());
+        
+        panelBotones.add(btnAgregarPG);
+        panelBotones.add(btnEditarPG);
+        panelBotones.add(btnEliminarPG);
+        panelBotones.add(btnRefrescarPG);
+        
+        // Tabla para PostgreSQL
+        modelPostgres = new DefaultTableModel() {
+            @Override
+            public boolean isCellEditable(int row, int column) {
+                return false;
+            }
+        };
+        tablaPostgres = new JTable(modelPostgres);
+        tablaPostgres.setFillsViewportHeight(true);
+        tablaPostgres.setRowHeight(25);
+        tablaPostgres.setFont(new Font("Arial", Font.PLAIN, 12));
+        tablaPostgres.getTableHeader().setFont(new Font("Arial", Font.BOLD, 12));
+        tablaPostgres.getTableHeader().setBackground(new Color(52, 73, 94));
+        tablaPostgres.getTableHeader().setForeground(Color.WHITE);
+        
+        JScrollPane scrollPane = new JScrollPane(tablaPostgres);
+        
+        panel.add(panelBotones, BorderLayout.NORTH);
+        panel.add(scrollPane, BorderLayout.CENTER);
+        
+        return panel;
+    }
+    
+    private JPanel crearPanelReportes() {
+        JPanel panel = new JPanel(new GridBagLayout());
+        panel.setBorder(BorderFactory.createEmptyBorder(20, 20, 20, 20));
+        GridBagConstraints gbc = new GridBagConstraints();
+        gbc.insets = new Insets(10, 10, 10, 10);
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+        
+        // Panel de métricas
+        JPanel panelMetricas = new JPanel(new GridLayout(2, 3, 15, 15));
+        panelMetricas.setBorder(BorderFactory.createTitledBorder("Métricas del Sistema"));
+        
+        JLabel lblTotalMySQL = new JLabel("Total MySQL: 0 registros");
+        JLabel lblTotalPostgres = new JLabel("Total PostgreSQL: 0 registros");
+        JLabel lblActividad = new JLabel("Actividad reciente: 0 operaciones");
+        
+        panelMetricas.add(lblTotalMySQL);
+        panelMetricas.add(lblTotalPostgres);
+        panelMetricas.add(lblActividad);
+        
+        // Panel de gráfico simplificado
+        JPanel panelGrafico = new JPanel() {
+            @Override
+            protected void paintComponent(Graphics g) {
+                super.paintComponent(g);
+                Graphics2D g2d = (Graphics2D) g;
+                g2d.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+                
+                int totalMySQL = modelMySQL.getRowCount();
+                int totalPostgres = modelPostgres.getRowCount();
+                int total = Math.max(totalMySQL + totalPostgres, 1);
+                
+                int anchoMySQL = (int)(getWidth() * 0.4);
+                int anchoPostgres = (int)(getWidth() * 0.4);
+                
+                g2d.setColor(new Color(100, 149, 237));
+                g2d.fillRect(50, getHeight() - 100, anchoMySQL, 80);
+                g2d.setColor(Color.BLACK);
+                g2d.drawString("MySQL: " + totalMySQL, 50, getHeight() - 110);
+                
+                g2d.setColor(new Color(52, 73, 94));
+                g2d.fillRect(50 + anchoMySQL + 50, getHeight() - 100, anchoPostgres, 80);
+                g2d.setColor(Color.BLACK);
+                g2d.drawString("PostgreSQL: " + totalPostgres, 50 + anchoMySQL + 50, getHeight() - 110);
+            }
+        };
+        panelGrafico.setPreferredSize(new Dimension(400, 200));
+        panelGrafico.setBorder(BorderFactory.createLineBorder(Color.GRAY));
+        panelGrafico.setBackground(Color.WHITE);
+        
+        gbc.gridx = 0;
+        gbc.gridy = 0;
+        gbc.gridwidth = 2;
+        panel.add(panelMetricas, gbc);
+        
+        gbc.gridy = 1;
+        panel.add(panelGrafico, gbc);
+        
+        // Actualizar métricas
+        actualizarMetricas(lblTotalMySQL, lblTotalPostgres);
+        
+        return panel;
+    }
+    
+    private JPanel crearPanelEstado() {
+        JPanel panel = new JPanel(new FlowLayout(FlowLayout.LEFT));
+        panel.setBackground(new Color(245, 245, 245));
+        
+        lblStatusMySQL = new JLabel("MySQL: ");
+        lblStatusPostgres = new JLabel("PostgreSQL: ");
+        
+        // Indicadores de estado
+        JLabel lblMySQLStatus = new JLabel("●");
+        lblMySQLStatus.setForeground(connMySQL != null ? Color.GREEN : Color.RED);
+        JLabel lblPostgresStatus = new JLabel("●");
+        lblPostgresStatus.setForeground(connPostgres != null ? Color.GREEN : Color.RED);
+        
+        panel.add(new JLabel("Estado:"));
+        panel.add(lblMySQLStatus);
+        panel.add(lblStatusMySQL);
+        panel.add(Box.createHorizontalStrut(20));
+        panel.add(lblPostgresStatus);
+        panel.add(lblStatusPostgres);
+        
+        // Reloj
+        JLabel lblReloj = new JLabel();
+        Timer timer = new Timer(1000, e -> {
+            lblReloj.setText(" " + new java.util.Date().toString());
+        });
+        timer.start();
+        panel.add(Box.createHorizontalStrut(50));
+        panel.add(lblReloj);
+        
+        return panel;
+    }
+    
+    private void cargarDatos() {
+        cargarDatosMySQL();
+        cargarDatosPostgres();
+        actualizarMetricas(null, null);
+        ((JPanel)tabbedPane.getComponentAt(2)).repaint(); // Repintar gráfico
+    }
+    
+    private void cargarDatosMySQL() {
+        String query = "SELECT id, nombre, email, fecha_registro FROM usuarios ORDER BY id";
+        try (Statement stmt = connMySQL.createStatement();
+             ResultSet rs = stmt.executeQuery(query)) {
+            
+            modelMySQL.setRowCount(0);
+            modelMySQL.setColumnIdentifiers(new String[]{"ID", "Nombre", "Email", "Fecha Registro"});
+            
+            while (rs.next()) {
+                Vector<Object> row = new Vector<>();
+                row.add(rs.getInt("id"));
+                row.add(rs.getString("nombre"));
+                row.add(rs.getString("email"));
+                row.add(rs.getDate("fecha_registro"));
+                modelMySQL.addRow(row);
+            }
+            
+            lblStatusMySQL.setText("MySQL: Conectado - " + modelMySQL.getRowCount() + " registros");
+        } catch (SQLException e) {
+            lblStatusMySQL.setText("MySQL: Error");
+            JOptionPane.showMessageDialog(this, "Error cargando datos MySQL: " + e.getMessage());
+        }
+    }
+    
+    private void cargarDatosPostgres() {
+        String query = "SELECT id, nombre, email, fecha_registro FROM usuarios ORDER BY id";
+        try (Statement stmt = connPostgres.createStatement();
+             ResultSet rs = stmt.executeQuery(query)) {
+            
+            modelPostgres.setRowCount(0);
+            modelPostgres.setColumnIdentifiers(new String[]{"ID", "Nombre", "Email", "Fecha Registro"});
+            
+            while (rs.next()) {
+                Vector<Object> row = new Vector<>();
+                row.add(rs.getInt("id"));
+                row.add(rs.getString("nombre"));
+                row.add(rs.getString("email"));
+                row.add(rs.getDate("fecha_registro"));
+                modelPostgres.addRow(row);
+            }
+            
+            lblStatusPostgres.setText("PostgreSQL: Conectado - " + modelPostgres.getRowCount() + " registros");
+        } catch (SQLException e) {
+            lblStatusPostgres.setText("PostgreSQL: Error");
+            JOptionPane.showMessageDialog(this, "Error cargando datos PostgreSQL: " + e.getMessage());
+        }
+    }
+    
+    private void actualizarMetricas(JLabel lblMySQL, JLabel lblPostgres) {
+        // Método para actualizar métricas en panel de reportes
+        if (lblMySQL != null && lblPostgres != null) {
+            lblMySQL.setText("Total MySQL: " + modelMySQL.getRowCount() + " registros");
+            lblPostgres.setText("Total PostgreSQL: " + modelPostgres.getRowCount() + " registros");
+        }
+    }
+    
+    private void agregarRegistroMySQL() {
+        JTextField nombreField = new JTextField(20);
+        JTextField emailField = new JTextField(20);
+        
+        JPanel panel = new JPanel(new GridLayout(2, 2, 5, 5));
+        panel.add(new JLabel("Nombre:"));
+        panel.add(nombreField);
+        panel.add(new JLabel("Email:"));
+        panel.add(emailField);
+        
+        int result = JOptionPane.showConfirmDialog(this, panel, "Agregar Usuario MySQL", 
+                                                   JOptionPane.OK_CANCEL_OPTION);
+        if (result == JOptionPane.OK_OPTION) {
+            String query = "INSERT INTO usuarios (nombre, email, fecha_registro) VALUES (?, ?, NOW())";
+            try (PreparedStatement pstmt = connMySQL.prepareStatement(query)) {
+                pstmt.setString(1, nombreField.getText());
+                pstmt.setString(2, emailField.getText());
+                pstmt.executeUpdate();
+                cargarDatosMySQL();
+                JOptionPane.showMessageDialog(this, "Usuario agregado exitosamente");
+            } catch (SQLException e) {
+                JOptionPane.showMessageDialog(this, "Error: " + e.getMessage());
+            }
+        }
+    }
+    
+    private void agregarRegistroPostgres() {
+        JTextField nombreField = new JTextField(20);
+        JTextField emailField = new JTextField(20);
+        
+        JPanel panel = new JPanel(new GridLayout(2, 2, 5, 5));
+        panel.add(new JLabel("Nombre:"));
+        panel.add(nombreField);
+        panel.add(new JLabel("Email:"));
+        panel.add(emailField);
+        
+        int result = JOptionPane.showConfirmDialog(this, panel, "Agregar Usuario PostgreSQL", 
+                                                   JOptionPane.OK_CANCEL_OPTION);
+        if (result == JOptionPane.OK_OPTION) {
+            String query = "INSERT INTO usuarios (nombre, email, fecha_registro) VALUES (?, ?, CURRENT_DATE)";
+            try (PreparedStatement pstmt = connPostgres.prepareStatement(query)) {
+                pstmt.setString(1, nombreField.getText());
+                pstmt.setString(2, emailField.getText());
+                pstmt.executeUpdate();
+                cargarDatosPostgres();
+                JOptionPane.showMessageDialog(this, "Usuario agregado exitosamente");
+            } catch (SQLException e) {
+                JOptionPane.showMessageDialog(this, "Error: " + e.getMessage());
+            }
+        }
+    }
+    
+    private void editarRegistroMySQL() {
+        int row = tablaMySQL.getSelectedRow();
+        if (row == -1) {
+            JOptionPane.showMessageDialog(this, "Seleccione un registro para editar");
+            return;
+        }
+        
+        int id = (int) modelMySQL.getValueAt(row, 0);
+        String nombre = (String) modelMySQL.getValueAt(row, 1);
+        String email = (String) modelMySQL.getValueAt(row, 2);
+        
+        JTextField nombreField = new JTextField(nombre, 20);
+        JTextField emailField = new JTextField(email, 20);
+        
+        JPanel panel = new JPanel(new GridLayout(2, 2, 5, 5));
+        panel.add(new JLabel("Nombre:"));
+        panel.add(nombreField);
+        panel.add(new JLabel("Email:"));
+        panel.add(emailField);
+        
+        int result = JOptionPane.showConfirmDialog(this, panel, "Editar Usuario MySQL", 
+                                                   JOptionPane.OK_CANCEL_OPTION);
+        if (result == JOptionPane.OK_OPTION) {
+            String query = "UPDATE usuarios SET nombre=?, email=? WHERE id=?";
+            try (PreparedStatement pstmt = connMySQL.prepareStatement(query)) {
+                pstmt.setString(1, nombreField.getText());
+                pstmt.setString(2, emailField.getText());
+                pstmt.setInt(3, id);
+                pstmt.executeUpdate();
+                cargarDatosMySQL();
+                JOptionPane.showMessageDialog(this, "Usuario actualizado exitosamente");
+            } catch (SQLException e) {
+                JOptionPane.showMessageDialog(this, "Error: " + e.getMessage());
+            }
+        }
+    }
+    
+    private void editarRegistroPostgres() {
+        int row = tablaPostgres.getSelectedRow();
+        if (row == -1) {
+            JOptionPane.showMessageDialog(this, "Seleccione un registro para editar");
+            return;
+        }
+        
+        int id = (int) modelPostgres.getValueAt(row, 0);
+        String nombre = (String) modelPostgres.getValueAt(row, 1);
+        String email = (String) modelPostgres.getValueAt(row, 2);
+        
+        JTextField nombreField = new JTextField(nombre, 20);
+        JTextField emailField = new JTextField(email, 20);
+        
+        JPanel panel = new JPanel(new GridLayout(2, 2, 5, 5));
+        panel.add(new JLabel("Nombre:"));
+        panel.add(nombreField);
+        panel.add(new JLabel("Email:"));
+        panel.add(emailField);
+        
+        int result = JOptionPane.showConfirmDialog(this, panel, "Editar Usuario PostgreSQL", 
+                                                   JOptionPane.OK_CANCEL_OPTION);
+        if (result == JOptionPane.OK_OPTION) {
+            String query = "UPDATE usuarios SET nombre=?, email=? WHERE id=?";
+            try (PreparedStatement pstmt = connPostgres.prepareStatement(query)) {
+                pstmt.setString(1, nombreField.getText());
+                pstmt.setString(2, emailField.getText());
+                pstmt.setInt(3, id);
+                pstmt.executeUpdate();
+                cargarDatosPostgres();
+                JOptionPane.showMessageDialog(this, "Usuario actualizado exitosamente");
+            } catch (SQLException e) {
+                JOptionPane.showMessageDialog(this, "Error: " + e.getMessage());
+            }
+        }
+    }
+    
+    private void eliminarRegistroMySQL() {
+        int row = tablaMySQL.getSelectedRow();
+        if (row == -1) {
+            JOptionPane.showMessageDialog(this, "Seleccione un registro para eliminar");
+            return;
+        }
+        
+        int id = (int) modelMySQL.getValueAt(row, 0);
+        int confirm = JOptionPane.showConfirmDialog(this, "¿Está seguro de eliminar este registro?", 
+                                                    "Confirmar", JOptionPane.YES_NO_OPTION);
+        if (confirm == JOptionPane.YES_OPTION) {
+            String query = "DELETE FROM usuarios WHERE id=?";
+            try (PreparedStatement pstmt = connMySQL.prepareStatement(query)) {
+                pstmt.setInt(1, id);
+                pstmt.executeUpdate();
+                cargarDatosMySQL();
+                JOptionPane.showMessageDialog(this, "Usuario eliminado exitosamente");
+            } catch (SQLException e) {
+                JOptionPane.showMessageDialog(this, "Error: " + e.getMessage());
+            }
+        }
+    }
+    
+    private void eliminarRegistroPostgres() {
+        int row = tablaPostgres.getSelectedRow();
+        if (row == -1) {
+            JOptionPane.showMessageDialog(this, "Seleccione un registro para eliminar");
+            return;
+        }
+        
+        int id = (int) modelPostgres.getValueAt(row, 0);
+        int confirm = JOptionPane.showConfirmDialog(this, "¿Está seguro de eliminar este registro?", 
+                                                    "Confirmar", JOptionPane.YES_NO_OPTION);
+        if (confirm == JOptionPane.YES_OPTION) {
+            String query = "DELETE FROM usuarios WHERE id=?";
+            try (PreparedStatement pstmt = connPostgres.prepareStatement(query)) {
+                pstmt.setInt(1, id);
+                pstmt.executeUpdate();
+                cargarDatosPostgres();
+                JOptionPane.showMessageDialog(this, "Usuario eliminado exitosamente");
+            } catch (SQLException e) {
+                JOptionPane.showMessageDialog(this, "Error: " + e.getMessage());
+            }
+        }
+    }
+    
+    private void exportarReporte() {
+        StringBuilder reporte = new StringBuilder();
+        reporte.append("=== REPORTE GENERAL DEL SISTEMA ===\n\n");
+        reporte.append("Fecha: ").append(new java.util.Date()).append("\n\n");
+        
+        reporte.append("BASE DE DATOS MySQL:\n");
+        reporte.append("Total registros: ").append(modelMySQL.getRowCount()).append("\n");
+        reporte.append("Lista de usuarios:\n");
+        for (int i = 0; i < modelMySQL.getRowCount(); i++) {
+            reporte.append("  - ").append(modelMySQL.getValueAt(i, 1))
+                   .append(" (").append(modelMySQL.getValueAt(i, 2)).append(")\n");
+        }
+        
+        reporte.append("\nBASE DE DATOS PostgreSQL:\n");
+        reporte.append("Total registros: ").append(modelPostgres.getRowCount()).append("\n");
+        reporte.append("Lista de usuarios:\n");
+        for (int i = 0; i < modelPostgres.getRowCount(); i++) {
+            reporte.append("  - ").append(modelPostgres.getValueAt(i, 1))
+                   .append(" (").append(modelPostgres.getValueAt(i, 2)).append(")\n");
+        }
+        
+        JTextArea textArea = new JTextArea(reporte.toString(), 20, 50);
+        textArea.setEditable(false);
+        JScrollPane scrollPane = new JScrollPane(textArea);
+        
+        JOptionPane.showMessageDialog(this, scrollPane, "Reporte General", JOptionPane.INFORMATION_MESSAGE);
+    }
+    
+    private void limpiarRegistros() {
+        int confirm = JOptionPane.showConfirmDialog(this, 
+            "¿Está seguro de limpiar registros antiguos (más de 30 días) en ambas bases de datos?", 
+            "Confirmar Limpieza", JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE);
+        
+        if (confirm == JOptionPane.YES_OPTION) {
+            String deleteQuery = "DELETE FROM usuarios WHERE fecha_registro < (CURRENT_DATE - INTERVAL '30 days')";
+            try {
+                // PostgreSQL
+                try (Statement stmt = connPostgres.createStatement()) {
+                    int pgDeleted = stmt.executeUpdate(deleteQuery);
+                    JOptionPane.showMessageDialog(this, "PostgreSQL: " + pgDeleted + " registros eliminados");
+                }
+                
+                // MySQL
+                String mysqlQuery = "DELETE FROM usuarios WHERE fecha_registro < DATE_SUB(NOW(), INTERVAL 30 DAY)";
+                try (Statement stmt = connMySQL.createStatement()) {
+                    int mysqlDeleted = stmt.executeUpdate(mysqlQuery);
+                    JOptionPane.showMessageDialog(this, "MySQL: " + mysqlDeleted + " registros eliminados");
+                }
+                
+                cargarDatos();
+            } catch (SQLException e) {
+                JOptionPane.showMessageDialog(this, "Error limpiando registros: " + e.getMessage());
+            }
+        }
+    }
+    
+    private void mostrarConfiguracion() {
+        JPanel panel = new JPanel(new GridLayout(0, 2, 10, 10));
+        panel.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
+        
+        panel.add(new JLabel("MySQL URL:"));
+        panel.add(new JLabel(MYSQL_URL));
+        panel.add(new JLabel("MySQL User:"));
+        panel.add(new JLabel(MYSQL_USER));
+        panel.add(new JLabel("PostgreSQL URL:"));
+        panel.add(new JLabel(POSTGRES_URL));
+        panel.add(new JLabel("PostgreSQL User:"));
+        panel.add(new JLabel(POSTGRES_USER));
+        
+        JOptionPane.showMessageDialog(this, panel, "Configuración Actual", JOptionPane.INFORMATION_MESSAGE);
+    }
+}
