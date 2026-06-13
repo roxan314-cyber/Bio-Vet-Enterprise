@@ -1,0 +1,420 @@
+<?php
+/**
+ * Clase para gestión de múltiples conexiones MySQL
+ * @author Backend
+ * @version 1.0
+ */
+class MySQLConnectionManager {
+    
+    private $connections = [];
+    private $activeConnection = null;
+    private $configurations = [];
+    
+    /**
+     * Constructor - Carga configuraciones desde archivo o array
+     * @param array $configs Configuraciones opcionales
+     */
+    public function __construct($configs = []) {
+        if (!empty($configs)) {
+            foreach ($configs as $name => $config) {
+                $this->addConnectionConfig($name, $config);
+            }
+        }
+        
+        // Cargar desde archivo si existe
+        if (file_exists('db_configs.json')) {
+            $this->loadConfigurationsFromFile('db_configs.json');
+        }
+    }
+    
+    /**
+     * Agrega configuración para una base de datos
+     * @param string $name Identificador de la conexión
+     * @param array $config Configuración (host, user, pass, db, port, charset)
+     * @return bool
+     */
+    public function addConnectionConfig($name, $config) {
+        $required = ['host', 'user', 'pass', 'db'];
+        foreach ($required as $field) {
+            if (!isset($config[$field])) {
+                throw new Exception("Configuración incompleta para '$name': falta '$field'");
+            }
+        }
+        
+        $defaults = [
+            'port' => 3306,
+            'charset' => 'utf8mb4'
+        ];
+        
+        $this->configurations[$name] = array_merge($defaults, $config);
+        return true;
+    }
+    
+    /**
+     * Conecta a una base de datos específica
+     * @param string $name Identificador de la conexión
+     * @param bool $forceNew Forzar nueva conexión aunque ya exista
+     * @return mysqli
+     */
+    public function connect($name, $forceNew = false) {
+        if (!$forceNew && isset($this->connections[$name]) && $this->connections[$name] instanceof mysqli) {
+            if ($this->connections[$name]->ping()) {
+                $this->activeConnection = $name;
+                return $this->connections[$name];
+            }
+        }
+        
+        if (!isset($this->configurations[$name])) {
+            throw new Exception("Configuración no encontrada para: $name");
+        }
+        
+        $config = $this->configurations[$name];
+        
+        $conn = new mysqli(
+            $config['host'],
+            $config['user'],
+            $config['pass'],
+            $config['db'],
+            $config['port']
+        );
+        
+        if ($conn->connect_error) {
+            throw new Exception("Error de conexión a '$name': " . $conn->connect_error);
+        }
+        
+        // Establecer charset
+        $conn->set_charset($config['charset']);
+        
+        $this->connections[$name] = $conn;
+        $this->activeConnection = $name;
+        
+        return $conn;
+    }
+    
+    /**
+     * Obtiene una conexión activa o la crea si no existe
+     * @param string|null $name Nombre de la conexión
+     * @return mysqli
+     */
+    public function getConnection($name = null) {
+        $connName = $name ?? $this->activeConnection;
+        
+        if (!$connName || !isset($this->connections[$connName])) {
+            throw new Exception("No hay conexión activa o especificada");
+        }
+        
+        // Verificar si la conexión sigue viva
+        if (!$this->connections[$connName]->ping()) {
+            $this->connect($connName, true);
+        }
+        
+        return $this->connections[$connName];
+    }
+    
+    /**
+     * Ejecuta una consulta SQL
+     * @param string $sql Consulta SQL
+     * @param string|null $connection Conexión específica
+     * @return mysqli_result|bool
+     */
+    public function query($sql, $connection = null) {
+        $conn = $this->getConnection($connection);
+        $result = $conn->query($sql);
+        
+        if ($result === false) {
+            throw new Exception("Error en consulta: " . $conn->error);
+        }
+        
+        return $result;
+    }
+    
+    /**
+     * Prepara y ejecuta una consulta con parámetros (prevención SQL injection)
+     * @param string $sql Consulta con placeholders (?)
+     * @param array $params Parámetros
+     * @param string|null $connection Conexión específica
+     * @return mysqli_stmt
+     */
+    public function executePrepared($sql, $params = [], $connection = null) {
+        $conn = $this->getConnection($connection);
+        $stmt = $conn->prepare($sql);
+        
+        if (!$stmt) {
+            throw new Exception("Error preparando consulta: " . $conn->error);
+        }
+        
+        if (!empty($params)) {
+            $types = '';
+            $bindParams = [];
+            
+            foreach ($params as $param) {
+                if (is_int($param)) {
+                    $types .= 'i';
+                } elseif (is_float($param)) {
+                    $types .= 'd';
+                } elseif (is_string($param)) {
+                    $types .= 's';
+                } else {
+                    $types .= 'b';
+                }
+                $bindParams[] = $param;
+            }
+            
+            array_unshift($bindParams, $types);
+            call_user_func_array([$stmt, 'bind_param'], $bindParams);
+        }
+        
+        $stmt->execute();
+        
+        if ($stmt->error) {
+            throw new Exception("Error ejecutando consulta: " . $stmt->error);
+        }
+        
+        return $stmt;
+    }
+    
+    /**
+     * Obtiene un solo registro
+     * @param string $sql Consulta SQL
+     * @param array $params Parámetros
+     * @param string|null $connection Conexión específica
+     * @return array|null
+     */
+    public function fetchOne($sql, $params = [], $connection = null) {
+        if (empty($params)) {
+            $result = $this->query($sql, $connection);
+            return $result->fetch_assoc();
+        } else {
+            $stmt = $this->executePrepared($sql, $params, $connection);
+            $result = $stmt->get_result();
+            return $result->fetch_assoc();
+        }
+    }
+    
+    /**
+     * Obtiene todos los registros
+     * @param string $sql Consulta SQL
+     * @param array $params Parámetros
+     * @param string|null $connection Conexión específica
+     * @return array
+     */
+    public function fetchAll($sql, $params = [], $connection = null) {
+        if (empty($params)) {
+            $result = $this->query($sql, $connection);
+            return $result->fetch_all(MYSQLI_ASSOC);
+        } else {
+            $stmt = $this->executePrepared($sql, $params, $connection);
+            $result = $stmt->get_result();
+            return $result->fetch_all(MYSQLI_ASSOC);
+        }
+    }
+    
+    /**
+     * Inserta un registro y retorna el ID
+     * @param string $table Tabla
+     * @param array $data Datos (campo => valor)
+     * @param string|null $connection Conexión específica
+     * @return int
+     */
+    public function insert($table, $data, $connection = null) {
+        $fields = array_keys($data);
+        $placeholders = array_fill(0, count($fields), '?');
+        
+        $sql = "INSERT INTO `$table` (`" . implode('`, `', $fields) . "`) 
+                VALUES (" . implode(', ', $placeholders) . ")";
+        
+        $this->executePrepared($sql, array_values($data), $connection);
+        
+        $conn = $this->getConnection($connection);
+        return $conn->insert_id;
+    }
+    
+    /**
+     * Actualiza registros
+     * @param string $table Tabla
+     * @param array $data Datos a actualizar
+     * @param string $where Condición WHERE
+     * @param array $whereParams Parámetros para WHERE
+     * @param string|null $connection Conexión específica
+     * @return int
+     */
+    public function update($table, $data, $where, $whereParams = [], $connection = null) {
+        $sets = [];
+        $params = [];
+        
+        foreach ($data as $field => $value) {
+            $sets[] = "`$field` = ?";
+            $params[] = $value;
+        }
+        
+        $params = array_merge($params, $whereParams);
+        
+        $sql = "UPDATE `$table` SET " . implode(', ', $sets) . " WHERE $where";
+        $stmt = $this->executePrepared($sql, $params, $connection);
+        
+        return $stmt->affected_rows;
+    }
+    
+    /**
+     * Inicia una transacción en la conexión especificada
+     * @param string|null $connection Conexión específica
+     */
+    public function beginTransaction($connection = null) {
+        $conn = $this->getConnection($connection);
+        $conn->begin_transaction();
+    }
+    
+    /**
+     * Confirma una transacción
+     * @param string|null $connection Conexión específica
+     */
+    public function commit($connection = null) {
+        $conn = $this->getConnection($connection);
+        $conn->commit();
+    }
+    
+    /**
+     * Revierte una transacción
+     * @param string|null $connection Conexión específica
+     */
+    public function rollback($connection = null) {
+        $conn = $this->getConnection($connection);
+        $conn->rollback();
+    }
+    
+    /**
+     * Cierra una conexión específica
+     * @param string|null $name Nombre de la conexión
+     */
+    public function closeConnection($name = null) {
+        if ($name && isset($this->connections[$name])) {
+            $this->connections[$name]->close();
+            unset($this->connections[$name]);
+        } elseif (!$name && $this->activeConnection) {
+            $this->closeConnection($this->activeConnection);
+        }
+    }
+    
+    /**
+     * Cierra todas las conexiones
+     */
+    public function closeAll() {
+        foreach ($this->connections as $name => $conn) {
+            if ($conn instanceof mysqli) {
+                $conn->close();
+            }
+        }
+        $this->connections = [];
+        $this->activeConnection = null;
+    }
+    
+    /**
+     * Carga configuraciones desde archivo JSON
+     * @param string $file Ruta del archivo
+     */
+    public function loadConfigurationsFromFile($file) {
+        if (!file_exists($file)) {
+            return false;
+        }
+        
+        $content = file_get_contents($file);
+        $configs = json_decode($content, true);
+        
+        if (json_last_error() === JSON_ERROR_NONE && is_array($configs)) {
+            foreach ($configs as $name => $config) {
+                $this->addConnectionConfig($name, $config);
+            }
+            return true;
+        }
+        
+        return false;
+    }
+    
+    /**
+     * Destructor - Cierra todas las conexiones
+     */
+    public function __destruct() {
+        $this->closeAll();
+    }
+}
+
+// ============ EJEMPLO DE USO ============
+
+/*
+// Configuración desde array
+$configs = [
+    'main' => [
+        'host' => 'localhost',
+        'user' => 'root',
+        'pass' => 'password',
+        'db' => 'database_main'
+    ],
+    'analytics' => [
+        'host' => '192.168.1.100',
+        'user' => 'analytics_user',
+        'pass' => 'analytics_pass',
+        'db' => 'database_analytics'
+    ],
+    'logs' => [
+        'host' => 'localhost',
+        'user' => 'logs_user',
+        'pass' => 'logs_pass',
+        'db' => 'database_logs'
+    ]
+];
+
+// Crear instancia
+$dbManager = new MySQLConnectionManager($configs);
+
+// Conectar y usar
+try {
+    // Usar base de datos principal
+    $users = $dbManager->fetchAll("SELECT * FROM users WHERE status = ?", ['active'], 'main');
+    
+    // Usar base de datos de analytics
+    $stats = $dbManager->fetchOne("SELECT COUNT(*) as total FROM page_views WHERE date = CURDATE()", [], 'analytics');
+    
+    // Insertar en logs
+    $logId = $dbManager->insert('system_logs', [
+        'action' => 'user_login',
+        'user_id' => 123,
+        'timestamp' => date('Y-m-d H:i:s')
+    ], 'logs');
+    
+    // Transacciones
+    $dbManager->beginTransaction('main');
+    try {
+        $dbManager->update('accounts', ['balance' => 100], 'id = ?', [1], 'main');
+        $dbManager->update('transactions', ['status' => 'completed'], 'user_id = ?', [1], 'main');
+        $dbManager->commit('main');
+    } catch (Exception $e) {
+        $dbManager->rollback('main');
+        throw $e;
+    }
+    
+} catch (Exception $e) {
+    echo "Error: " . $e->getMessage();
+}
+
+// Configuración desde archivo JSON (db_configs.json)
+/*
+{
+    "main": {
+        "host": "localhost",
+        "user": "root",
+        "pass": "password",
+        "db": "main_db",
+        "port": 3306,
+        "charset": "utf8mb4"
+    },
+    "secondary": {
+        "host": "db2.example.com",
+        "user": "user2",
+        "pass": "pass2",
+        "db": "secondary_db"
+    }
+}
+*/
+*/
+
+?>
