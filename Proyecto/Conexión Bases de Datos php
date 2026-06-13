@@ -418,3 +418,13 @@ try {
 */
 
 ?>
+
+// Crear instancia con múltiples configuraciones
+$db = new MySQLConnectionManager([
+    'db1' => ['host' => 'localhost', 'user' => 'user1', 'pass' => 'pass1', 'db' => 'db1'],
+    'db2' => ['host' => 'localhost', 'user' => 'user2', 'pass' => 'pass2', 'db' => 'db2']
+]);
+
+// Consultar diferentes bases de datos
+$data1 = $db->fetchAll("SELECT * FROM tabla", [], 'db1');
+$data2 = $db->fetchAll("SELECT * FROM otra_tabla", [], 'db2');
