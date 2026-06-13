@@ -1,0 +1,556 @@
+<?php
+/**
+ * Sistema de Protección para Múltiples Bases de Datos MySQL
+ * @author Backend
+ * @version 2.0
+ */
+class DatabaseProtectionSystem {
+    
+    private $connectionManager;
+    private $securityLog = [];
+    private $encryptionKey;
+    private $blockedIPs = [];
+    private $failedAttempts = [];
+    private $allowedTables = [];
+    private $queryPatterns = [];
+    
+    // Configuración de protección
+    private $config = [
+        'max_failed_attempts' => 5,
+        'block_time_minutes' => 30,
+        'enable_query_logging' => true,
+        'enable_sql_injection_detection' => true,
+        'enable_xss_protection' => true,
+        'max_query_length' => 10000,
+        'forbidden_keywords' => [
+            'DROP', 'TRUNCATE', 'ALTER', 'CREATE', 'DELETE', 
+            'UPDATE', 'INSERT', 'RENAME', 'GRANT', 'REVOKE'
+        ],
+        'sensitive_tables' => [
+            'users', 'passwords', 'tokens', 'sessions', 'credentials'
+        ]
+    ];
+    
+    /**
+     * Constructor
+     * @param MySQLConnectionManager $connectionManager
+     * @param string $encryptionKey Clave para encriptación
+     */
+    public function __construct($connectionManager, $encryptionKey = null) {
+        $this->connectionManager = $connectionManager;
+        $this->encryptionKey = $encryptionKey ?? $this->generateEncryptionKey();
+        $this->loadBlockedIPs();
+        $this->initializeProtectionPatterns();
+    }
+    
+    /**
+     * Inicializa patrones de protección
+     */
+    private function initializeProtectionPatterns() {
+        // Patrones de SQL Injection
+        $this->queryPatterns = [
+            'union_select' => '/\bUNION\b.*\bSELECT\b/i',
+            'xor_injection' => '/\bXOR\b/i',
+            'boolean_injection' => "/'.*?(OR|AND).*?'/i",
+            'comment_injection' => '/--|\/\*|\*\/|#/',
+            'stacked_queries' => '/;.*?(DROP|DELETE|INSERT|UPDATE)/i',
+            'sleep_injection' => '/\bSLEEP\s*\(/i',
+            'benchmark_injection' => '/\bBENCHMARK\s*\(/i',
+            'information_schema' => '/information_schema/i'
+        ];
+    }
+    
+    /**
+     * Genera clave de encriptación
+     */
+    private function generateEncryptionKey() {
+        return bin2hex(openssl_random_pseudo_bytes(32));
+    }
+    
+    /**
+     * Carga IPs bloqueadas desde archivo
+     */
+    private function loadBlockedIPs() {
+        if (file_exists('blocked_ips.json')) {
+            $data = json_decode(file_get_contents('blocked_ips.json'), true);
+            $this->blockedIPs = $data['ips'] ?? [];
+        }
+    }
+    
+    /**
+     * Guarda IPs bloqueadas
+     */
+    private function saveBlockedIPs() {
+        file_put_contents('blocked_ips.json', json_encode([
+            'ips' => $this->blockedIPs,
+            'last_update' => date('Y-m-d H:i:s')
+        ]));
+    }
+    
+    /**
+     * Verifica si una IP está bloqueada
+     */
+    private function isIPBlocked($ip) {
+        if (isset($this->blockedIPs[$ip])) {
+            $blockUntil = $this->blockedIPs[$ip];
+            if (time() < $blockUntil) {
+                return true;
+            } else {
+                unset($this->blockedIPs[$ip]);
+                $this->saveBlockedIPs();
+            }
+        }
+        return false;
+    }
+    
+    /**
+     * Registra intento fallido
+     */
+    private function logFailedAttempt($ip, $reason, $query = null) {
+        if (!isset($this->failedAttempts[$ip])) {
+            $this->failedAttempts[$ip] = [];
+        }
+        
+        $this->failedAttempts[$ip][] = [
+            'time' => time(),
+            'reason' => $reason,
+            'query' => $query
+        ];
+        
+        // Limpiar intentos antiguos (última hora)
+        $this->failedAttempts[$ip] = array_filter($this->failedAttempts[$ip], function($attempt) {
+            return $attempt['time'] > (time() - 3600);
+        });
+        
+        // Bloquear IP si excede intentos
+        if (count($this->failedAttempts[$ip]) >= $this->config['max_failed_attempts']) {
+            $this->blockedIPs[$ip] = time() + ($this->config['block_time_minutes'] * 60);
+            $this->saveBlockedIPs();
+            $this->logSecurityEvent("IP bloqueada: $ip por $this->config[block_time_minutes] minutos");
+        }
+    }
+    
+    /**
+     * Registra evento de seguridad
+     */
+    private function logSecurityEvent($event, $severity = 'WARNING') {
+        $logEntry = [
+            'timestamp' => date('Y-m-d H:i:s'),
+            'severity' => $severity,
+            'event' => $event,
+            'ip' => $_SERVER['REMOTE_ADDR'] ?? 'unknown'
+        ];
+        
+        $this->securityLog[] = $logEntry;
+        
+        // Guardar en archivo
+        file_put_contents('security_log.json', json_encode($this->securityLog, JSON_PRETTY_PRINT));
+        
+        // Notificar si es crítico
+        if ($severity === 'CRITICAL') {
+            $this->sendAlert($event);
+        }
+    }
+    
+    /**
+     * Envía alerta de seguridad
+     */
+    private function sendAlert($message) {
+        // Configurar método de alerta (email, webhook, etc.)
+        $webhookUrl = $this->config['alert_webhook'] ?? null;
+        if ($webhookUrl) {
+            file_get_contents($webhookUrl . '?message=' . urlencode($message));
+        }
+    }
+    
+    /**
+     * Detecta SQL Injection en consulta
+     */
+    private function detectSQLInjection($query) {
+        $query = strtoupper($query);
+        
+        foreach ($this->queryPatterns as $patternName => $pattern) {
+            if (preg_match($pattern, $query)) {
+                return "Posible SQL Injection detectada: $patternName";
+            }
+        }
+        
+        // Verificar palabras prohibidas en contexto peligroso
+        foreach ($this->config['forbidden_keywords'] as $keyword) {
+            if (preg_match("/\b$keyword\b/i", $query) && 
+                !preg_match("/^\s*SELECT.*\b$keyword\b.*FROM/i", $query)) {
+                return "Palabra prohibida en contexto peligroso: $keyword";
+            }
+        }
+        
+        return false;
+    }
+    
+    /**
+     * Detecta XSS en datos
+     */
+    private function detectXSS($data) {
+        if (!$this->config['enable_xss_protection']) {
+            return false;
+        }
+        
+        $patterns = [
+            '/<script\b[^>]*>(.*?)<\/script>/is',
+            '/javascript:/i',
+            '/on\w+\s*=/i',
+            '/<iframe\b/i',
+            '/<object\b/i',
+            '/<embed\b/i',
+            '/expression\s*\(/i'
+        ];
+        
+        foreach ($patterns as $pattern) {
+            if (preg_match($pattern, $data)) {
+                return "Posible XSS detectado";
+            }
+        }
+        
+        return false;
+    }
+    
+    /**
+     * Escapa datos para prevenir XSS
+     */
+    private function sanitizeData($data) {
+        if (is_array($data)) {
+            return array_map([$this, 'sanitizeData'], $data);
+        }
+        
+        if (is_string($data)) {
+            // Eliminar tags HTML peligrosos
+            $data = strip_tags($data, '<p><br><b><strong><em><i>');
+            // Convertir caracteres especiales
+            $data = htmlspecialchars($data, ENT_QUOTES | ENT_HTML5, 'UTF-8');
+        }
+        
+        return $data;
+    }
+    
+    /**
+     * Verifica permisos de tabla
+     */
+    private function checkTablePermissions($database, $table, $operation) {
+        // Verificar si es tabla sensible
+        if (in_array(strtolower($table), $this->config['sensitive_tables'])) {
+            if ($operation !== 'SELECT') {
+                $this->logSecurityEvent("Intento de modificar tabla sensible: $database.$table", 'CRITICAL');
+                return false;
+            }
+        }
+        
+        // Verificar tablas permitidas
+        if (!empty($this->allowedTables)) {
+            $key = "$database.$table";
+            if (!in_array($key, $this->allowedTables) && !in_array($table, $this->allowedTables)) {
+                $this->logSecurityEvent("Intento de acceder a tabla no permitida: $database.$table", 'WARNING');
+                return false;
+            }
+        }
+        
+        return true;
+    }
+    
+    /**
+     * Consulta segura con múltiples capas de protección
+     */
+    public function secureQuery($query, $params = [], $connectionName = null, $allowWrite = false) {
+        $ip = $_SERVER['REMOTE_ADDR'] ?? 'unknown';
+        
+        // 1. Verificar IP bloqueada
+        if ($this->isIPBlocked($ip)) {
+            $this->logSecurityEvent("Intento de acceso desde IP bloqueada: $ip");
+            throw new Exception("Acceso denegado: IP temporalmente bloqueada");
+        }
+        
+        // 2. Verificar tamaño de consulta
+        if (strlen($query) > $this->config['max_query_length']) {
+            $this->logFailedAttempt($ip, "Consulta excede longitud máxima", substr($query, 0, 200));
+            throw new Exception("Consulta demasiado larga");
+        }
+        
+        // 3. Detectar SQL Injection
+        if ($this->config['enable_sql_injection_detection']) {
+            $injectionDetected = $this->detectSQLInjection($query);
+            if ($injectionDetected) {
+                $this->logFailedAttempt($ip, $injectionDetected, $query);
+                $this->logSecurityEvent($injectionDetected . " - IP: $ip", 'CRITICAL');
+                throw new Exception("Consulta bloqueada por razones de seguridad");
+            }
+        }
+        
+        // 4. Verificar tipo de operación
+        $queryUpper = strtoupper($query);
+        $isWriteOperation = preg_match('/^\s*(INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|TRUNCATE)/', $queryUpper);
+        
+        if ($isWriteOperation && !$allowWrite) {
+            $this->logFailedAttempt($ip, "Intento de escritura no permitido", $query);
+            throw new Exception("Operación de escritura no permitida en este contexto");
+        }
+        
+        // 5. Logging de consultas
+        if ($this->config['enable_query_logging']) {
+            $this->logSecurityEvent("Consulta ejecutada: " . substr($query, 0, 500), 'INFO');
+        }
+        
+        // 6. Ejecutar consulta de forma segura
+        try {
+            if (empty($params)) {
+                $result = $this->connectionManager->query($query, $connectionName);
+            } else {
+                $result = $this->connectionManager->executePrepared($query, $params, $connectionName);
+            }
+            
+            // Limpiar intentos fallidos si tiene éxito
+            unset($this->failedAttempts[$ip]);
+            
+            return $result;
+            
+        } catch (Exception $e) {
+            $this->logFailedAttempt($ip, "Error en consulta: " . $e->getMessage(), $query);
+            throw $e;
+        }
+    }
+    
+    /**
+     * Obtiene datos con protección
+     */
+    public function secureFetch($sql, $params = [], $connectionName = null) {
+        $result = $this->secureQuery($sql, $params, $connectionName, false);
+        
+        if ($result instanceof mysqli_result) {
+            $data = $result->fetch_all(MYSQLI_ASSOC);
+            return $this->sanitizeData($data);
+        }
+        
+        return $this->sanitizeData($result);
+    }
+    
+    /**
+     * Inserta datos con encriptación opcional
+     */
+    public function secureInsert($table, $data, $connectionName = null, $encryptFields = []) {
+        $ip = $_SERVER['REMOTE_ADDR'] ?? 'unknown';
+        
+        // Verificar permisos de tabla
+        $dbName = $this->getCurrentDatabase($connectionName);
+        if (!$this->checkTablePermissions($dbName, $table, 'INSERT')) {
+            throw new Exception("No tiene permisos para insertar en esta tabla");
+        }
+        
+        // Encriptar campos sensibles
+        foreach ($encryptFields as $field) {
+            if (isset($data[$field])) {
+                $data[$field] = $this->encryptData($data[$field]);
+            }
+        }
+        
+        // Sanitizar datos
+        $data = $this->sanitizeData($data);
+        
+        // Verificar XSS en datos
+        foreach ($data as $key => $value) {
+            $xssDetected = $this->detectXSS($value);
+            if ($xssDetected) {
+                $this->logFailedAttempt($ip, $xssDetected . " en campo $key", json_encode($data));
+                throw new Exception("Datos bloqueados: posible XSS detectado");
+            }
+        }
+        
+        return $this->connectionManager->insert($table, $data, $connectionName);
+    }
+    
+    /**
+     * Actualiza datos con protección
+     */
+    public function secureUpdate($table, $data, $where, $whereParams = [], $connectionName = null) {
+        $ip = $_SERVER['REMOTE_ADDR'] ?? 'unknown';
+        
+        // Verificar permisos
+        $dbName = $this->getCurrentDatabase($connectionName);
+        if (!$this->checkTablePermissions($dbName, $table, 'UPDATE')) {
+            throw new Exception("No tiene permisos para actualizar esta tabla");
+        }
+        
+        // Sanitizar datos
+        $data = $this->sanitizeData($data);
+        
+        // Verificar XSS
+        foreach ($data as $key => $value) {
+            $xssDetected = $this->detectXSS($value);
+            if ($xssDetected) {
+                $this->logFailedAttempt($ip, $xssDetected . " en campo $key", json_encode($data));
+                throw new Exception("Datos bloqueados: posible XSS detectado");
+            }
+        }
+        
+        return $this->connectionManager->update($table, $data, $where, $whereParams, $connectionName);
+    }
+    
+    /**
+     * Encripta datos sensibles
+     */
+    public function encryptData($data) {
+        $iv = openssl_random_pseudo_bytes(openssl_cipher_iv_length('aes-256-cbc'));
+        $encrypted = openssl_encrypt($data, 'aes-256-cbc', $this->encryptionKey, 0, $iv);
+        return base64_encode($iv . $encrypted);
+    }
+    
+    /**
+     * Desencripta datos
+     */
+    public function decryptData($encryptedData) {
+        $data = base64_decode($encryptedData);
+        $ivLength = openssl_cipher_iv_length('aes-256-cbc');
+        $iv = substr($data, 0, $ivLength);
+        $encrypted = substr($data, $ivLength);
+        return openssl_decrypt($encrypted, 'aes-256-cbc', $this->encryptionKey, 0, $iv);
+    }
+    
+    /**
+     * Obtiene base de datos actual
+     */
+    private function getCurrentDatabase($connectionName) {
+        $conn = $this->connectionManager->getConnection($connectionName);
+        $result = $conn->query("SELECT DATABASE()");
+        $row = $result->fetch_row();
+        return $row[0];
+    }
+    
+    /**
+     * Genera respaldo de seguridad
+     */
+    public function backupSensitiveData($connectionName = null) {
+        $backup = [
+            'timestamp' => date('Y-m-d H:i:s'),
+            'blocked_ips' => $this->blockedIPs,
+            'failed_attempts' => $this->failedAttempts,
+            'security_log' => array_slice($this->securityLog, -100), // Últimos 100 eventos
+            'encryption_key_hash' => hash('sha256', $this->encryptionKey)
+        ];
+        
+        $backupFile = 'security_backup_' . date('Ymd_His') . '.json';
+        file_put_contents($backupFile, json_encode($backup, JSON_PRETTY_PRINT));
+        
+        return $backupFile;
+    }
+    
+    /**
+     * Configura reglas de protección
+     */
+    public function setConfig($key, $value) {
+        if (isset($this->config[$key])) {
+            $this->config[$key] = $value;
+            return true;
+        }
+        return false;
+    }
+    
+    /**
+     * Permite tablas específicas
+     */
+    public function allowTables($tables, $database = '*') {
+        foreach ($tables as $table) {
+            $this->allowedTables[] = ($database === '*') ? $table : "$database.$table";
+        }
+    }
+    
+    /**
+     * Verifica salud del sistema
+     */
+    public function healthCheck() {
+        return [
+            'status' => 'healthy',
+            'blocked_ips_count' => count($this->blockedIPs),
+            'failed_attempts_count' => array_sum(array_map('count', $this->failedAttempts)),
+            'encryption_enabled' => !empty($this->encryptionKey),
+            'protection_level' => 'high',
+            'last_backup' => file_exists('security_backup_*.json') ? 'available' : 'none'
+        ];
+    }
+}
+
+// ============ EJEMPLO DE USO COMPLETO ============
+
+/*
+// Configuración de conexiones múltiples
+$configs = [
+    'main' => [
+        'host' => 'localhost',
+        'user' => 'root',
+        'pass' => 'password',
+        'db' => 'main_db'
+    ],
+    'users' => [
+        'host' => 'localhost',
+        'user' => 'user_db',
+        'pass' => 'user_pass',
+        'db' => 'users_db'
+    ]
+];
+
+// Inicializar gestor de conexiones
+$dbManager = new MySQLConnectionManager($configs);
+
+// Inicializar sistema de protección
+$protection = new DatabaseProtectionSystem($dbManager, 'mi_clave_secreta_123');
+
+// Configurar protección
+$protection->setConfig('max_failed_attempts', 3);
+$protection->setConfig('block_time_minutes', 60);
+$protection->allowTables(['users', 'products'], 'main_db');
+
+try {
+    // Consulta segura
+    $users = $protection->secureFetch(
+        "SELECT * FROM users WHERE status = ? AND last_login > ?",
+        ['active', '2024-01-01'],
+        'users'
+    );
+    
+    // Inserción segura con encriptación
+    $userId = $protection->secureInsert(
+        'users',
+        [
+            'username' => 'john_doe',
+            'email' => 'john@example.com',
+            'password' => 'secret123',
+            'credit_card' => '4111111111111111'
+        ],
+        'main',
+        ['credit_card'] // Campos a encriptar
+    );
+    
+    // Actualización segura
+    $affected = $protection->secureUpdate(
+        'products',
+        ['price' => 29.99, 'stock' => 100],
+        'id = ? AND category = ?',
+        [1, 'electronics'],
+        'main'
+    );
+    
+    // Respaldo de seguridad
+    $backupFile = $protection->backupSensitiveData();
+    
+    // Verificar salud del sistema
+    $health = $protection->healthCheck();
+    
+} catch (Exception $e) {
+    echo "Error de seguridad: " . $e->getMessage();
+    // Registrar en log del sistema
+    error_log("Security violation: " . $e->getMessage());
+}
+*/
+
+?>
+
+// Configuración avanzada
+$protection->setConfig('max_failed_attempts', 5);
+$protection->setConfig('block_time_minutes', 120);
+$protection->setConfig('enable_xss_protection', true);
+$protection->allowTables(['users', 'orders'], 'main_db');
