@@ -1,0 +1,23 @@
+# Ocultar información del servidor
+ServerSignature Off
+Header unset X-Powered-By
+Header set X-Frame-Options "DENY"
+Header set X-Content-Type-Options "nosniff"
+
+# Prevenir acceso directo a archivos sensibles
+<FilesMatch "\.(json|log|ini|sql|bak|config)$">
+    Order Allow,Deny
+    Deny from all
+</FilesMatch>
+
+# Proteger directorios
+<DirectoryMatch "/(data|logs|config)">
+    Order Deny,Allow
+    Deny from all
+</DirectoryMatch>
+
+# Limitar tamaño de peticiones
+LimitRequestBody 1048576
+
+# Prevenir listado de directorios
+Options -Indexes
