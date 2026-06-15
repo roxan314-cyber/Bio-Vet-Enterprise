@@ -269,7 +269,7 @@ header {
     margin: 0 auto;
 }
 
-.input-contacto, .textarea-contacto {
+.input-contacto, .Mensaje {
     width: 100%;
     padding: 15px;
     border: 1px solid #ccc;
@@ -280,12 +280,13 @@ header {
     transition: border-color 0.3s ease, box-shadow 0.3s ease;
 }
 
-.textarea-contacto {
-    resize: vertical;
-    min-height: 120px;
+.Mensaje {
+    border-radius: 8px;
+    resize: none;
+    min-height: 100px;
 }
 
-.input-contacto:focus, .textarea-contacto:focus {
+.input-contacto:focus, .Mensaje:focus {
     outline: none;
     border-color: var(--color-primario);
     box-shadow: 0 0 8px rgba(30, 90, 91, 0.2);
