@@ -1,0 +1,71 @@
+<?php
+// api/login.php
+header('Content-Type: application/json');
+header('Access-Control-Allow-Origin: *');
+header('Access-Control-Allow-Methods: POST');
+header('Access-Control-Allow-Headers: Content-Type');
+
+require_once __DIR__ . '/../config/database.php';
+require_once __DIR__ . '/../utils/jwt_helper.php';
+
+// Solo aceptar POST
+if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+    http_response_code(405);
+    echo json_encode(['success' => false, 'mensaje' => 'Método no permitido']);
+    exit;
+}
+
+// Obtener datos del body
+$input = json_decode(file_get_contents('php://input'), true);
+
+if (!isset($input['email']) || !isset($input['password'])) {
+    http_response_code(400);
+    echo json_encode(['success' => false, 'mensaje' => 'Email y contraseña son requeridos']);
+    exit;
+}
+
+$email = $input['email'];
+$password = $input['password'];
+
+try {
+    $pdo = getDBConnection();
+    $stmt = $pdo->prepare("SELECT id, name, email, password, rol, telefono FROM users WHERE email = ?");
+    $stmt->execute([$email]);
+    $usuario = $stmt->fetch();
+    
+    if (!$usuario || !password_verify($password, $usuario['password'])) {
+        http_response_code(401);
+        echo json_encode(['success' => false, 'mensaje' => 'Credenciales inválidas']);
+        exit;
+    }
+    
+    // Generar JWT
+    $payload = [
+        'user_id' => $usuario['id'],
+        'email' => $usuario['email'],
+        'rol' => $usuario['rol']
+    ];
+    $token = generarJWT($payload);
+    
+    // Actualizar último acceso
+    $updateStmt = $pdo->prepare("UPDATE users SET ultimo_acceso = NOW() WHERE id = ?");
+    $updateStmt->execute([$usuario['id']]);
+    
+    http_response_code(200);
+    echo json_encode([
+        'success' => true,
+        'mensaje' => 'Inicio de sesión exitoso',
+        'token' => $token,
+        'usuario' => [
+            'id' => $usuario['id'],
+            'name' => $usuario['name'],
+            'email' => $usuario['email'],
+            'rol' => $usuario['rol'],
+            'telefono' => $usuario['telefono']
+        ]
+    ]);
+    
+} catch (PDOException $e) {
+    http_response_code(500);
+    echo json_encode(['success' => false, 'mensaje' => 'Error interno del servidor']);
+}
