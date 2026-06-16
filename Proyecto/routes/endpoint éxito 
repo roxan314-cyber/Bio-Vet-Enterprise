@@ -1,0 +1,13 @@
+{
+    "success": true,
+    "mensaje": "Usuario autenticado correctamente",
+    "usuario": {
+        "id": 1,
+        "name": "Administrador",
+        "email": "admin@biovet.com",
+        "rol": "admin",
+        "telefono": null,
+        "ultimo_acceso": "2026-06-16 15:30:00",
+        "fecha_registro": "2026-06-16 10:00:00"
+    }
+}
