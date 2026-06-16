@@ -16,3 +16,10 @@
         "emitido_en": "2026-06-16 15:30:00"
     }
 }
+
+{
+    "success": false,
+    "valid": false,
+    "mensaje": "Token inválido o expirado",
+    "error": "INVALID_TOKEN"
+}
