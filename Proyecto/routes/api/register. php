@@ -1,0 +1,76 @@
+<?php
+// api/register.php
+header('Content-Type: application/json');
+header('Access-Control-Allow-Origin: *');
+header('Access-Control-Allow-Methods: POST');
+header('Access-Control-Allow-Headers: Content-Type');
+
+require_once __DIR__ . '/../config/database.php';
+
+if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+    http_response_code(405);
+    echo json_encode(['success' => false, 'mensaje' => 'Método no permitido']);
+    exit;
+}
+
+$input = json_decode(file_get_contents('php://input'), true);
+
+// Validaciones básicas
+$errors = [];
+if (empty($input['name'])) $errors['name'] = 'El nombre es requerido';
+if (empty($input['email']) || !filter_var($input['email'], FILTER_VALIDATE_EMAIL)) {
+    $errors['email'] = 'Email válido es requerido';
+}
+if (empty($input['password']) || strlen($input['password']) < 6) {
+    $errors['password'] = 'La contraseña debe tener al menos 6 caracteres';
+}
+if ($input['password'] !== $input['password_confirmation']) {
+    $errors['password_confirmation'] = 'Las contraseñas no coinciden';
+}
+
+if (!empty($errors)) {
+    http_response_code(400);
+    echo json_encode(['success' => false, 'errors' => $errors]);
+    exit;
+}
+
+try {
+    $pdo = getDBConnection();
+    
+    // Verificar si el email ya existe
+    $checkStmt = $pdo->prepare("SELECT id FROM users WHERE email = ?");
+    $checkStmt->execute([$input['email']]);
+    if ($checkStmt->fetch()) {
+        http_response_code(409);
+        echo json_encode(['success' => false, 'mensaje' => 'El email ya está registrado']);
+        exit;
+    }
+    
+    // Crear usuario
+    $hash = password_hash($input['password'], PASSWORD_DEFAULT);
+    $stmt = $pdo->prepare("INSERT INTO users (name, email, password, rol, telefono) VALUES (?, ?, ?, ?, ?)");
+    $stmt->execute([
+        $input['name'],
+        $input['email'],
+        $hash,
+        $input['rol'] ?? 'veterinario',
+        $input['telefono'] ?? null
+    ]);
+    
+    $userId = $pdo->lastInsertId();
+    
+    http_response_code(201);
+    echo json_encode([
+        'success' => true,
+        'mensaje' => 'Usuario registrado exitosamente',
+        'usuario' => [
+            'id' => $userId,
+            'name' => $input['name'],
+            'email' => $input['email']
+        ]
+    ]);
+    
+} catch (PDOException $e) {
+    http_response_code(500);
+    echo json_encode(['success' => false, 'mensaje' => 'Error interno del servidor']);
+}
