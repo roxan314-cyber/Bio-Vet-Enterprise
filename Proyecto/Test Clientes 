@@ -1,0 +1,178 @@
+import pytest
+from sqlalchemy import create_engine, Column, String, Text
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker
+from werkzeug.security import generate_password_hash  # Si usas login
+
+# ========== CONFIGURACIÓN ==========
+Base = declarative_base()
+
+class Cliente(Base):
+    __tablename__ = 'Clientes'
+    
+    id_cliente = Column(String(10), primary_key=True)
+    nombre_cliente = Column(String(100), nullable=False)
+    cedula_identidad = Column(String(20), unique=True, nullable=False)
+    telefono = Column(String(20))
+    domicilio = Column(Text)
+
+# BD en memoria para tests
+@pytest.fixture
+def session():
+    engine = create_engine('sqlite:///:memory:')
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine)
+    return Session()
+
+# ========== TEST DE CREACIÓN ==========
+def test_crear_cliente_exitoso(session):
+    # Preparación
+    cliente = Cliente(
+        id_cliente='CLI001',
+        nombre_cliente='María González',
+        cedula_identidad='12345678A',
+        telefono='+34 912345678',
+        domicilio='Calle Principal 123, Madrid'
+    )
+    
+    # Ejecución
+    session.add(cliente)
+    session.commit()
+    
+    # Verificación
+    recuperado = session.query(Cliente).filter_by(id_cliente='CLI001').first()
+    assert recuperado is not None
+    assert recuperado.nombre_cliente == 'María González'
+    assert recuperado.cedula_identidad == '12345678A'
+    assert recuperado.telefono == '+34 912345678'
+    assert recuperado.domicilio == 'Calle Principal 123, Madrid'
+
+# ========== TEST DE VALIDACIONES ==========
+def test_cedula_unica(session):
+    # Crear primer cliente
+    cliente1 = Cliente(
+        id_cliente='CLI001',
+        nombre_cliente='Juan Pérez',
+        cedula_identidad='11111111A',
+        telefono='600000001'
+    )
+    session.add(cliente1)
+    session.commit()
+    
+    # Intentar crear segundo con misma cédula
+    cliente2 = Cliente(
+        id_cliente='CLI002',
+        nombre_cliente='Carlos López',
+        cedula_identidad='11111111A',  # Misma cédula
+        telefono='600000002'
+    )
+    
+    # Verificar que lanza error UNIQUE constraint
+    with pytest.raises(Exception) as excinfo:
+        session.add(cliente2)
+        session.commit()
+    
+    assert 'UNIQUE constraint' in str(excinfo.value)
+
+def test_id_cliente_longitud(session):
+    # Intentar crear con ID > 10 caracteres
+    cliente = Cliente(
+        id_cliente='CLI1234567890',  # 13 caracteres
+        nombre_cliente='Test Largo',
+        cedula_identidad='99999999Z'
+    )
+    
+    with pytest.raises(Exception):
+        session.add(cliente)
+        session.commit()
+
+def test_nombre_obligatorio(session):
+    # Intentar crear sin nombre (NULL)
+    cliente = Cliente(
+        id_cliente='CLI003',
+        nombre_cliente=None,  # Violación NOT NULL
+        cedula_identidad='77777777C'
+    )
+    
+    with pytest.raises(Exception):
+        session.add(cliente)
+        session.commit()
+
+# ========== TEST DE CONSULTA ==========
+def test_buscar_cliente_por_cedula(session):
+    # Preparar datos
+    cliente = Cliente(
+        id_cliente='CLI004',
+        nombre_cliente='Ana Martínez',
+        cedula_identidad='44444444D',
+        telefono='650000004'
+    )
+    session.add(cliente)
+    session.commit()
+    
+    # Buscar por cédula
+    resultado = session.query(Cliente).filter_by(cedula_identidad='44444444D').first()
+    
+    assert resultado is not None
+    assert resultado.id_cliente == 'CLI004'
+    assert resultado.nombre_cliente == 'Ana Martínez'
+
+def test_buscar_cliente_inexistente(session):
+    resultado = session.query(Cliente).filter_by(cedula_identidad='99999999Z').first()
+    assert resultado is None
+
+# ========== TEST DE ACTUALIZACIÓN ==========
+def test_actualizar_domicilio(session):
+    # Crear cliente
+    cliente = Cliente(
+        id_cliente='CLI005',
+        nombre_cliente='Pedro Sánchez',
+        cedula_identidad='55555555E',
+        domicilio='Calle Vieja 1'
+    )
+    session.add(cliente)
+    session.commit()
+    
+    # Actualizar domicilio
+    cliente.domicilio = 'Calle Nueva 456, Barcelona'
+    session.commit()
+    
+    # Verificar
+    recuperado = session.query(Cliente).get('CLI005')
+    assert recuperado.domicilio == 'Calle Nueva 456, Barcelona'
+
+# ========== TEST DE ELIMINACIÓN ==========
+def test_eliminar_cliente(session):
+    # Crear cliente
+    cliente = Cliente(
+        id_cliente='CLI006',
+        nombre_cliente='Laura Gómez',
+        cedula_identidad='66666666F'
+    )
+    session.add(cliente)
+    session.commit()
+    
+    # Eliminar
+    session.delete(cliente)
+    session.commit()
+    
+    # Verificar que no existe
+    recuperado = session.query(Cliente).get('CLI006')
+    assert recuperado is None
+
+# ========== TEST DE MÚLTIPLES REGISTROS ==========
+def test_listar_todos_clientes(session):
+    # Insertar 3 clientes
+    clientes = [
+        Cliente(id_cliente='CLI007', nombre_cliente='A', cedula_identidad='111A'),
+        Cliente(id_cliente='CLI008', nombre_cliente='B', cedula_identidad='222B'),
+        Cliente(id_cliente='CLI009', nombre_cliente='C', cedula_identidad='333C')
+    ]
+    for c in clientes:
+        session.add(c)
+    session.commit()
+    
+    # Consultar todos
+    todos = session.query(Cliente).all()
+    assert len(todos) == 3
+    assert {c.nombre_cliente for c in todos} == {'A', 'B', 'C'}
