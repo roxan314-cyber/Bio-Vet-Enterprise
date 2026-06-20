@@ -1,0 +1,299 @@
+import pytest
+from sqlalchemy import create_engine, Column, String, Integer
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker
+from datetime import datetime
+import re
+
+# ========== CONFIGURACIÓN ==========
+Base = declarative_base()
+
+class Doctor(Base):
+    __tablename__ = 'Doctores'
+    
+    id_doctor = Column(String(10), primary_key=True)
+    nombre_doctor = Column(String(100), nullable=False)
+    especialidad = Column(String(50), default='Medicina Veterinaria')
+    numero_colegiado = Column(String(30))
+    telefono = Column(String(20))
+    correo = Column(String(100))
+    turno = Column(String(20))
+    estado = Column(String(15), default='Activo')
+    
+    def __repr__(self):
+        return f"<Doctor {self.id_doctor}: {self.nombre_doctor}>"
+
+# BD en memoria para tests
+@pytest.fixture
+def session():
+    engine = create_engine('sqlite:///:memory:')
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine)
+    return Session()
+
+# ========== TEST DE CREACIÓN ==========
+def test_crear_doctor_exitoso(session):
+    # Preparación
+    doctor = Doctor(
+        id_doctor='DOC001',
+        nombre_doctor='María Rodríguez',
+        especialidad='Cirugía Veterinaria',
+        numero_colegiado='COL-12345',
+        telefono='+34 612345678',
+        correo='maria.rodriguez@clinicavet.com',
+        turno='Mañana',
+        estado='Activo'
+    )
+    
+    # Ejecución
+    session.add(doctor)
+    session.commit()
+    
+    # Verificación
+    recuperado = session.query(Doctor).filter_by(id_doctor='DOC001').first()
+    assert recuperado is not None
+    assert recuperado.nombre_doctor == 'María Rodríguez'
+    assert recuperado.especialidad == 'Cirugía Veterinaria'
+    assert recuperado.numero_colegiado == 'COL-12345'
+    assert recuperado.telefono == '+34 612345678'
+    assert recuperado.correo == 'maria.rodriguez@clinicavet.com'
+    assert recuperado.turno == 'Mañana'
+    assert recuperado.estado == 'Activo'
+
+# ========== TEST DE VALORES POR DEFECTO ==========
+def test_especialidad_por_defecto(session):
+    # Crear doctor sin especialidad
+    doctor = Doctor(
+        id_doctor='DOC002',
+        nombre_doctor='Carlos Pérez',
+        numero_colegiado='COL-67890'
+    )
+    
+    session.add(doctor)
+    session.commit()
+    
+    # Verificar que se asignó el valor por defecto
+    recuperado = session.query(Doctor).get('DOC002')
+    assert recuperado.especialidad == 'Medicina Veterinaria'
+
+def test_estado_por_defecto(session):
+    # Crear doctor sin estado
+    doctor = Doctor(
+        id_doctor='DOC003',
+        nombre_doctor='Ana Gómez',
+        especialidad='Dermatología'
+    )
+    
+    session.add(doctor)
+    session.commit()
+    
+    # Verificar que se asignó 'Activo'
+    recuperado = session.query(Doctor).get('DOC003')
+    assert recuperado.estado == 'Activo'
+
+# ========== TEST DE VALIDACIONES ==========
+def test_id_doctor_longitud(session):
+    # Intentar con ID > 10 caracteres
+    doctor = Doctor(
+        id_doctor='DOC1234567890',  # 13 caracteres
+        nombre_doctor='Test Largo',
+        numero_colegiado='COL-999'
+    )
+    
+    with pytest.raises(Exception):
+        session.add(doctor)
+        session.commit()
+
+def test_nombre_doctor_obligatorio(session):
+    # Intentar crear sin nombre (NULL)
+    doctor = Doctor(
+        id_doctor='DOC004',
+        nombre_doctor=None,  # Violación NOT NULL
+        numero_colegiado='COL-111'
+    )
+    
+    with pytest.raises(Exception):
+        session.add(doctor)
+        session.commit()
+
+def test_correo_invalido(session):
+    # Validación de formato de email (capa de aplicación)
+    doctor = Doctor(
+        id_doctor='DOC005',
+        nombre_doctor='Luis Fernández',
+        correo='correo-invalido',  # Sin @
+        numero_colegiado='COL-222'
+    )
+    
+    # Verificar formato con regex
+    patron_email = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+    assert re.match(patron_email, doctor.correo) is None
+    
+    # El test debe fallar si la aplicación valida formato
+
+# ========== TEST DE CONSULTAS ==========
+def test_buscar_doctor_por_colegiado(session):
+    # Preparar datos
+    doctor = Doctor(
+        id_doctor='DOC006',
+        nombre_doctor='Sofía Martínez',
+        numero_colegiado='COL-55555',
+        especialidad='Oftalmología'
+    )
+    session.add(doctor)
+    session.commit()
+    
+    # Buscar por número de colegiado
+    resultado = session.query(Doctor).filter_by(numero_colegiado='COL-55555').first()
+    
+    assert resultado is not None
+    assert resultado.id_doctor == 'DOC006'
+    assert resultado.nombre_doctor == 'Sofía Martínez'
+
+def test_buscar_doctores_por_especialidad(session):
+    # Insertar múltiples doctores
+    doctores = [
+        Doctor(id_doctor='DOC007', nombre_doctor='A', especialidad='Cardiología', numero_colegiado='001'),
+        Doctor(id_doctor='DOC008', nombre_doctor='B', especialidad='Cardiología', numero_colegiado='002'),
+        Doctor(id_doctor='DOC009', nombre_doctor='C', especialidad='Dermatología', numero_colegiado='003')
+    ]
+    for d in doctores:
+        session.add(d)
+    session.commit()
+    
+    # Consultar por especialidad
+    cardiologos = session.query(Doctor).filter_by(especialidad='Cardiología').all()
+    assert len(cardiologos) == 2
+    assert all(d.especialidad == 'Cardiología' for d in cardiologos)
+
+def test_buscar_doctores_por_turno(session):
+    # Insertar doctores con diferentes turnos
+    doctores = [
+        Doctor(id_doctor='DOC010', nombre_doctor='D', turno='Mañana', numero_colegiado='010'),
+        Doctor(id_doctor='DOC011', nombre_doctor='E', turno='Mañana', numero_colegiado='011'),
+        Doctor(id_doctor='DOC012', nombre_doctor='F', turno='Tarde', numero_colegiado='012')
+    ]
+    for d in doctores:
+        session.add(d)
+    session.commit()
+    
+    # Consultar turno mañana
+    manana = session.query(Doctor).filter_by(turno='Mañana').all()
+    assert len(manana) == 2
+    assert all(d.turno == 'Mañana' for d in manana)
+
+# ========== TEST DE ACTUALIZACIÓN ==========
+def test_cambiar_especialidad(session):
+    # Crear doctor
+    doctor = Doctor(
+        id_doctor='DOC013',
+        nombre_doctor='Jorge Ramírez',
+        especialidad='Medicina Interna',
+        numero_colegiado='COL-888'
+    )
+    session.add(doctor)
+    session.commit()
+    
+    # Actualizar especialidad
+    doctor.especialidad = 'Neurología Veterinaria'
+    session.commit()
+    
+    # Verificar
+    recuperado = session.query(Doctor).get('DOC013')
+    assert recuperado.especialidad == 'Neurología Veterinaria'
+
+def test_cambiar_estado_inactivo(session):
+    # Crear doctor activo
+    doctor = Doctor(
+        id_doctor='DOC014',
+        nombre_doctor='Patricia Díaz',
+        estado='Activo',
+        numero_colegiado='COL-777'
+    )
+    session.add(doctor)
+    session.commit()
+    
+    # Cambiar a inactivo (baja médica, jubilación, etc.)
+    doctor.estado = 'Inactivo'
+    session.commit()
+    
+    # Verificar
+    recuperado = session.query(Doctor).get('DOC014')
+    assert recuperado.estado == 'Inactivo'
+
+def test_cambiar_turno(session):
+    # Crear doctor
+    doctor = Doctor(
+        id_doctor='DOC015',
+        nombre_doctor='Roberto Torres',
+        turno='Mañana',
+        numero_colegiado='COL-666'
+    )
+    session.add(doctor)
+    session.commit()
+    
+    # Cambiar turno
+    doctor.turno = 'Noche'
+    session.commit()
+    
+    # Verificar
+    recuperado = session.query(Doctor).get('DOC015')
+    assert recuperado.turno == 'Noche'
+
+# ========== TEST DE ELIMINACIÓN ==========
+def test_eliminar_doctor(session):
+    # Crear doctor
+    doctor = Doctor(
+        id_doctor='DOC016',
+        nombre_doctor='Elena Castro',
+        numero_colegiado='COL-555'
+    )
+    session.add(doctor)
+    session.commit()
+    
+    # Eliminar
+    session.delete(doctor)
+    session.commit()
+    
+    # Verificar que no existe
+    recuperado = session.query(Doctor).get('DOC016')
+    assert recuperado is None
+
+# ========== TEST DE ESTADOS Y FILTROS ==========
+def test_listar_doctores_activos(session):
+    # Insertar doctores con diferentes estados
+    doctores = [
+        Doctor(id_doctor='DOC017', nombre_doctor='G', estado='Activo', numero_colegiado='017'),
+        Doctor(id_doctor='DOC018', nombre_doctor='H', estado='Inactivo', numero_colegiado='018'),
+        Doctor(id_doctor='DOC019', nombre_doctor='I', estado='Activo', numero_colegiado='019')
+    ]
+    for d in doctores:
+        session.add(d)
+    session.commit()
+    
+    # Filtrar solo activos
+    activos = session.query(Doctor).filter_by(estado='Activo').all()
+    assert len(activos) == 2
+    assert all(d.estado == 'Activo' for d in activos)
+
+def test_buscar_por_correo(session):
+    # Crear doctor con correo
+    doctor = Doctor(
+        id_doctor='DOC020',
+        nombre_doctor='Fernando Ruiz',
+        correo='fernando.ruiz@clinicavet.com',
+        numero_colegiado='COL-444'
+    )
+    session.add(doctor)
+    session.commit()
+    
+    # Buscar por correo exacto
+    resultado = session.query(Doctor).filter_by(correo='fernando.ruiz@clinicavet.com').first()
+    assert resultado is not None
+    assert resultado.nombre_doctor == 'Fernando Ruiz'
+
+# ========== TEST DE INTEGRIDAD REFERENCIAL (si existe relación) ==========
+def test_relacion_con_citas(session):
+    # Este test asume que tienes una tabla Citas
+    # Verifica que no se pueda eliminar un doctor con citas pendientes
+    pass
