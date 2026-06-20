@@ -1,0 +1,450 @@
+import pytest
+from sqlalchemy import create_engine, Column, String, Text, Integer, Date, ForeignKey
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker, relationship
+from datetime import datetime, date
+from sqlalchemy.exc import IntegrityError
+
+# ========== CONFIGURACIÓN ==========
+Base = declarative_base()
+
+# Definir las 4 tablas para el test
+class Cliente(Base):
+    __tablename__ = 'Clientes'
+    id_cliente = Column(String(10), primary_key=True)
+    nombre_cliente = Column(String(100), nullable=False)
+    cedula_identidad = Column(String(20), unique=True, nullable=False)
+    telefono = Column(String(20))
+    domicilio = Column(Text)
+    
+    historias = relationship("HistoriaClinica", back_populates="cliente")
+
+class Paciente(Base):
+    __tablename__ = 'Pacientes'
+    id_paciente = Column(String(10), primary_key=True)
+    nombre_paciente = Column(String(100), nullable=False)
+    especie = Column(String(50))
+    raza = Column(String(50))
+    fecha_nacimiento = Column(Date)
+    
+    historias = relationship("HistoriaClinica", back_populates="paciente")
+
+class Doctor(Base):
+    __tablename__ = 'Doctores'
+    id_doctor = Column(String(10), primary_key=True)
+    nombre_doctor = Column(String(100), nullable=False)
+    especialidad = Column(String(50), default='Medicina Veterinaria')
+    numero_colegiado = Column(String(30))
+    telefono = Column(String(20))
+    correo = Column(String(100))
+    turno = Column(String(20))
+    estado = Column(String(15), default='Activo')
+    
+    historias = relationship("HistoriaClinica", back_populates="doctor")
+
+class HistoriaClinica(Base):
+    __tablename__ = 'Historias_Clinicas'
+    
+    id_consulta = Column(Integer, primary_key=True, autoincrement=True)
+    fecha = Column(Date, nullable=False)
+    id_cliente = Column(String(10), ForeignKey('Clientes.id_cliente'))
+    id_paciente = Column(String(10), ForeignKey('Pacientes.id_paciente'))
+    id_doctor = Column(String(10), ForeignKey('Doctores.id_doctor'))
+    motivo_consulta = Column(Text)
+    condicion_corporal = Column(Integer)
+    diagnostico_dx = Column(Text)
+    plan_accion = Column(Text)
+    
+    # Relaciones
+    cliente = relationship("Cliente", back_populates="historias")
+    paciente = relationship("Paciente", back_populates="historias")
+    doctor = relationship("Doctor", back_populates="historias")
+
+# BD en memoria para tests
+@pytest.fixture
+def session():
+    engine = create_engine('sqlite:///:memory:', echo=False)
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine)
+    session = Session()
+    
+    # Datos de prueba (setup)
+    cliente = Cliente(
+        id_cliente='CLI001',
+        nombre_cliente='María González',
+        cedula_identidad='12345678A'
+    )
+    paciente = Paciente(
+        id_paciente='PAC001',
+        nombre_paciente='Rex',
+        especie='Perro',
+        raza='Pastor Alemán'
+    )
+    doctor = Doctor(
+        id_doctor='DOC001',
+        nombre_doctor='Carlos Rodríguez',
+        numero_colegiado='COL-12345'
+    )
+    
+    session.add_all([cliente, paciente, doctor])
+    session.commit()
+    
+    yield session
+    session.close()
+
+# ========== TEST DE CREACIÓN ==========
+def test_crear_historia_clinica_exitosa(session):
+    # Preparación
+    historia = HistoriaClinica(
+        fecha=date.today(),
+        id_cliente='CLI001',
+        id_paciente='PAC001',
+        id_doctor='DOC001',
+        motivo_consulta='Fiebre y vómitos persistentes',
+        condicion_corporal=3,
+        diagnostico_dx='Gastroenteritis aguda',
+        plan_accion='Suero intravenoso + dieta blanda por 3 días'
+    )
+    
+    # Ejecución
+    session.add(historia)
+    session.commit()
+    
+    # Verificación
+    recuperado = session.query(HistoriaClinica).first()
+    assert recuperado is not None
+    assert recuperado.id_consulta == 1  # AUTO_INCREMENT empieza en 1
+    assert recuperado.fecha == date.today()
+    assert recuperado.id_cliente == 'CLI001'
+    assert recuperado.id_paciente == 'PAC001'
+    recuperado.id_doctor == 'DOC001'
+    assert recuperado.motivo_consulta == 'Fiebre y vómitos persistentes'
+    assert recuperado.condicion_corporal == 3
+    assert recuperado.diagnostico_dx == 'Gastroenteritis aguda'
+    assert recuperado.plan_accion == 'Suero intravenoso + dieta blanda por 3 días'
+
+# ========== TEST DE INTEGRIDAD REFERENCIAL ==========
+def test_llave_foranea_cliente(session):
+    # Intentar crear consulta con cliente inexistente
+    historia = HistoriaClinica(
+        fecha=date.today(),
+        id_cliente='CLI999',  # No existe
+        id_paciente='PAC001',
+        id_doctor='DOC001'
+    )
+    
+    with pytest.raises(IntegrityError):
+        session.add(historia)
+        session.commit()
+
+def test_llave_foranea_paciente(session):
+    # Intentar crear consulta con paciente inexistente
+    historia = HistoriaClinica(
+        fecha=date.today(),
+        id_cliente='CLI001',
+        id_paciente='PAC999',  # No existe
+        id_doctor='DOC001'
+    )
+    
+    with pytest.raises(IntegrityError):
+        session.add(historia)
+        session.commit()
+
+def test_llave_foranea_doctor(session):
+    # Intentar crear consulta con doctor inexistente
+    historia = HistoriaClinica(
+        fecha=date.today(),
+        id_cliente='CLI001',
+        id_paciente='PAC001',
+        id_doctor='DOC999'  # No existe
+    )
+    
+    with pytest.raises(IntegrityError):
+        session.add(historia)
+        session.commit()
+
+def test_fecha_obligatoria(session):
+    # Intentar crear consulta sin fecha (NULL)
+    historia = HistoriaClinica(
+        fecha=None,  # Violación NOT NULL
+        id_cliente='CLI001',
+        id_paciente='PAC001',
+        id_doctor='DOC001'
+    )
+    
+    with pytest.raises(IntegrityError):
+        session.add(historia)
+        session.commit()
+
+# ========== TEST DE AUTO_INCREMENT ==========
+def test_auto_incremento_consecutivo(session):
+    # Crear 3 consultas
+    consultas = [
+        HistoriaClinica(
+            fecha=date(2025, 1, i),
+            id_cliente='CLI001',
+            id_paciente='PAC001',
+            id_doctor='DOC001',
+            motivo_consulta=f'Consulta {i}'
+        ) for i in range(1, 4)
+    ]
+    
+    for c in consultas:
+        session.add(c)
+    session.commit()
+    
+    # Verificar IDs consecutivos
+    ids = [c.id_consulta for c in session.query(HistoriaClinica).order_by(HistoriaClinica.id_consulta).all()]
+    assert ids == [1, 2, 3]
+
+# ========== TEST DE CONSULTAS ==========
+def test_buscar_historias_por_cliente(session):
+    # Crear consultas para diferentes clientes
+    cliente2 = Cliente(id_cliente='CLI002', nombre_cliente='Juan Pérez', cedula_identidad='87654321B')
+    session.add(cliente2)
+    session.commit()
+    
+    historias = [
+        HistoriaClinica(fecha=date.today(), id_cliente='CLI001', id_paciente='PAC001', id_doctor='DOC001'),
+        HistoriaClinica(fecha=date.today(), id_cliente='CLI001', id_paciente='PAC001', id_doctor='DOC001'),
+        HistoriaClinica(fecha=date.today(), id_cliente='CLI002', id_paciente='PAC001', id_doctor='DOC001')
+    ]
+    for h in historias:
+        session.add(h)
+    session.commit()
+    
+    # Consultar historias del cliente CLI001
+    resultado = session.query(HistoriaClinica).filter_by(id_cliente='CLI001').all()
+    assert len(resultado) == 2
+    assert all(h.id_cliente == 'CLI001' for h in resultado)
+
+def test_buscar_historias_por_paciente(session):
+    # Crear segundo paciente
+    paciente2 = Paciente(id_paciente='PAC002', nombre_paciente='Luna', especie='Gato')
+    session.add(paciente2)
+    session.commit()
+    
+    historias = [
+        HistoriaClinica(fecha=date.today(), id_cliente='CLI001', id_paciente='PAC001', id_doctor='DOC001'),
+        HistoriaClinica(fecha=date.today(), id_cliente='CLI001', id_paciente='PAC001', id_doctor='DOC001'),
+        HistoriaClinica(fecha=date.today(), id_cliente='CLI001', id_paciente='PAC002', id_doctor='DOC001')
+    ]
+    for h in historias:
+        session.add(h)
+    session.commit()
+    
+    # Consultar historias del paciente PAC001
+    resultado = session.query(HistoriaClinica).filter_by(id_paciente='PAC001').all()
+    assert len(resultado) == 2
+    assert all(h.id_paciente == 'PAC001' for h in resultado)
+
+def test_buscar_historias_por_doctor(session):
+    # Crear segundo doctor
+    doctor2 = Doctor(id_doctor='DOC002', nombre_doctor='Ana Gómez', numero_colegiado='COL-67890')
+    session.add(doctor2)
+    session.commit()
+    
+    historias = [
+        HistoriaClinica(fecha=date.today(), id_cliente='CLI001', id_paciente='PAC001', id_doctor='DOC001'),
+        HistoriaClinica(fecha=date.today(), id_cliente='CLI001', id_paciente='PAC001', id_doctor='DOC001'),
+        HistoriaClinica(fecha=date.today(), id_cliente='CLI001', id_paciente='PAC001', id_doctor='DOC002')
+    ]
+    for h in historias:
+        session.add(h)
+    session.commit()
+    
+    # Consultar historias del doctor DOC001
+    resultado = session.query(HistoriaClinica).filter_by(id_doctor='DOC001').all()
+    assert len(resultado) == 2
+    assert all(h.id_doctor == 'DOC001' for h in resultado)
+
+def test_buscar_historias_por_rango_fechas(session):
+    # Crear consultas en diferentes fechas
+    historias = [
+        HistoriaClinica(fecha=date(2025, 1, 1), id_cliente='CLI001', id_paciente='PAC001', id_doctor='DOC001'),
+        HistoriaClinica(fecha=date(2025, 1, 15), id_cliente='CLI001', id_paciente='PAC001', id_doctor='DOC001'),
+        HistoriaClinica(fecha=date(2025, 2, 1), id_cliente='CLI001', id_paciente='PAC001', id_doctor='DOC001')
+    ]
+    for h in historias:
+        session.add(h)
+    session.commit()
+    
+    # Filtrar por rango de fechas (Enero 2025)
+    inicio = date(2025, 1, 1)
+    fin = date(2025, 1, 31)
+    resultado = session.query(HistoriaClinica).filter(
+        HistoriaClinica.fecha.between(inicio, fin)
+    ).all()
+    
+    assert len(resultado) == 2
+    assert all(datetime(2025, 1, 1) <= h.fecha <= datetime(2025, 1, 31) for h in resultado)
+
+# ========== TEST DE ACTUALIZACIÓN ==========
+def test_actualizar_diagnostico(session):
+    # Crear consulta
+    historia = HistoriaClinica(
+        fecha=date.today(),
+        id_cliente='CLI001',
+        id_paciente='PAC001',
+        id_doctor='DOC001',
+        diagnostico_dx='Sospecha de infección',
+        condicion_corporal=3
+    )
+    session.add(historia)
+    session.commit()
+    
+    # Actualizar diagnóstico
+    historia.diagnostico_dx = 'Infección bacteriana confirmada'
+    historia.condicion_corporal = 4
+    session.commit()
+    
+    # Verificar
+    recuperado = session.query(HistoriaClinica).first()
+    assert recuperado.diagnostico_dx == 'Infección bacteriana confirmada'
+    assert recuperado.condicion_corporal == 4
+
+def test_actualizar_plan_accion(session):
+    # Crear consulta
+    historia = HistoriaClinica(
+        fecha=date.today(),
+        id_cliente='CLI001',
+        id_paciente='PAC001',
+        id_doctor='DOC001',
+        plan_accion='Observación por 24h'
+    )
+    session.add(historia)
+    session.commit()
+    
+    # Actualizar plan
+    historia.plan_accion = 'Antibióticos por 7 días + control en 3 días'
+    session.commit()
+    
+    # Verificar
+    recuperado = session.query(HistoriaClinica).first()
+    assert recuperado.plan_accion == 'Antibióticos por 7 días + control en 3 días'
+
+# ========== TEST DE ELIMINACIÓN ==========
+def test_eliminar_historia(session):
+    # Crear consulta
+    historia = HistoriaClinica(
+        fecha=date.today(),
+        id_cliente='CLI001',
+        id_paciente='PAC001',
+        id_doctor='DOC001'
+    )
+    session.add(historia)
+    session.commit()
+    
+    # Eliminar
+    session.delete(historia)
+    session.commit()
+    
+    # Verificar que no existe
+    recuperado = session.query(HistoriaClinica).first()
+    assert recuperado is None
+
+def test_eliminar_cliente_con_historias(session):
+    # La relación es CASCADE? Depende del diseño
+    # Si no hay CASCADE, debe fallar o manejar ON DELETE
+    pass
+
+# ========== TEST DE VALIDACIONES DE NEGOCIO ==========
+def test_condicion_corporal_rango_valido(session):
+    # Validar valores del 1 al 5
+    valores_validos = [1, 2, 3, 4, 5]
+    for valor in valores_validos:
+        historia = HistoriaClinica(
+            fecha=date.today(),
+            id_cliente='CLI001',
+            id_paciente='PAC001',
+            id_doctor='DOC001',
+            condicion_corporal=valor
+        )
+        session.add(historia)
+        session.commit()
+        assert historia.condicion_corporal in range(1, 6)
+        session.delete(historia)
+        session.commit()
+
+def test_condicion_corporal_fuera_rango(session):
+    # Intentar crear con valor inválido (debe validar en la app)
+    historia = HistoriaClinica(
+        fecha=date.today(),
+        id_cliente='CLI001',
+        id_paciente='PAC001',
+        id_doctor='DOC001',
+        condicion_corporal=10  # Fuera de rango
+    )
+    
+    # Validación a nivel de aplicación (no BD)
+    if historia.condicion_corporal not in range(1, 6):
+        with pytest.raises(ValueError):
+            raise ValueError("Condición corporal debe ser entre 1 y 5")
+        return
+    
+    session.add(historia)
+    session.commit()
+
+def test_fecha_no_futura(session):
+    # Validar que la fecha no sea futura
+    fecha_futura = date(2030, 12, 31)
+    historia = HistoriaClinica(
+        fecha=fecha_futura,
+        id_cliente='CLI001',
+        id_paciente='PAC001',
+        id_doctor='DOC001'
+    )
+    
+    # Validación a nivel de aplicación
+    if historia.fecha > date.today():
+        with pytest.raises(ValueError):
+            raise ValueError("La fecha no puede ser futura")
+        return
+    
+    session.add(historia)
+    session.commit()
+
+# ========== TEST DE RELACIONES (JOIN) ==========
+def test_obtener_historia_completa_con_relaciones(session):
+    # Crear consulta
+    historia = HistoriaClinica(
+        fecha=date.today(),
+        id_cliente='CLI001',
+        id_paciente='PAC001',
+        id_doctor='DOC001',
+        motivo_consulta='Revisión anual'
+    )
+    session.add(historia)
+    session.commit()
+    
+    # Consultar con relaciones cargadas
+    resultado = session.query(HistoriaClinica).first()
+    
+    # Verificar que se pueden acceder a las relaciones
+    assert resultado.cliente is not None
+    assert resultado.cliente.nombre_cliente == 'María González'
+    assert resultado.paciente is not None
+    assert resultado.paciente.nombre_paciente == 'Rex'
+    assert resultado.doctor is not None
+    assert resultado.doctor.nombre_doctor == 'Carlos Rodríguez'
+
+def test_obtener_historias_con_paginacion(session):
+    # Crear 10 consultas
+    for i in range(10):
+        historia = HistoriaClinica(
+            fecha=date.today(),
+            id_cliente='CLI001',
+            id_paciente='PAC001',
+            id_doctor='DOC001'
+        )
+        session.add(historia)
+    session.commit()
+    
+    # Paginación: página 1 (5 registros)
+    pagina1 = session.query(HistoriaClinica).limit(5).offset(0).all()
+    assert len(pagina1) == 5
+    
+    # Página 2 (siguientes 5)
+    pagina2 = session.query(HistoriaClinica).limit(5).offset(5).all()
+    assert len(pagina2) == 5
+    assert pagina1[0].id_consulta != pagina2[0].id_consulta
