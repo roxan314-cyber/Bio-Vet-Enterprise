@@ -11,7 +11,7 @@ class HistoriasClinicasTest extends TestCase
      */
     protected function setUp(): void
     {
-        // 1. Configura aquí las credenciales de tu base de datos de pruebas
+        // 1. Configura aquí las credenciales de la base de datos de pruebas
         $dsn = 'mysql:host=127.0.0.1;dbname=veterinaria_test_db;charset=utf8';
         $user = 'root';
         $password = '';
