@@ -1,0 +1,25 @@
+# Ejemplo con pytest + fixtures
+@pytest.fixture
+def test_db():
+    # Configura BD en memoria o contenedor Docker
+    engine = create_engine("sqlite:///test.db")
+    Base.metadata.create_all(engine)
+    yield engine
+    Base.metadata.drop_all(engine)
+
+def test_login_integracion(test_db):
+    # 1. Crear usuario en BD
+    user = User(email="test@email.com", password_hash=hash_password("123456"))
+    session.add(user)
+    session.commit()
+    
+    # 2. Ejecutar login real
+    response = client.post("/api/login", json={
+        "email": "test@email.com",
+        "password": "123456"
+    })
+    
+    # 3. Verificar
+    assert response.status_code == 200
+    assert "access_token" in response.json()
+
