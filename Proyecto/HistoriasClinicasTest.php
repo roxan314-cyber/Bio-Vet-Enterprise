@@ -7,11 +7,11 @@ class HistoriasClinicasTest extends TestCase
     private PDO $db;
 
     /**
-     * Set up the database connection and schema before each test.
+     * Configura la conexión a la base de datos y el esquema antes de cada prueba.
      */
     protected function setUp(): void
     {
-        // 1. Configure your testing database credentials here
+        // 1. Configura aquí las credenciales de tu base de datos de pruebas
         $dsn = 'mysql:host=127.0.0.1;dbname=veterinaria_test_db;charset=utf8';
         $user = 'root';
         $password = '';
@@ -20,21 +20,21 @@ class HistoriasClinicasTest extends TestCase
             $this->db = new PDO($dsn, $user, $password);
             $this->db->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
         } catch (PDOException $e) {
-            $this->markTestSkipped('Database connection failed: ' . $e->getMessage());
+            $this->markTestSkipped('Conexión a la base de datos fallida: ' . $e->getMessage());
         }
 
-        // 2. Drop existing tables to ensure a clean state
+        // 2. Elimina las tablas existentes para asegurar un estado limpio
         $this->db->exec("DROP TABLE IF EXISTS Historias_Clinicas");
         $this->db->exec("DROP TABLE IF EXISTS Clientes");
         $this->db->exec("DROP TABLE IF EXISTS Pacientes");
         $this->db->exec("DROP TABLE IF EXISTS Doctores");
 
-        // 3. Create prerequisite tables to satisfy Foreign Keys
+        // 3. Crea tablas de prerrequisitos para satisfacer las llaves foráneas
         $this->db->exec("CREATE TABLE Clientes (id_cliente VARCHAR(10) PRIMARY KEY)");
         $this->db->exec("CREATE TABLE Pacientes (id_paciente VARCHAR(10) PRIMARY KEY)");
         $this->db->exec("CREATE TABLE Doctores (id_doctor VARCHAR(10) PRIMARY KEY)");
 
-        // 4. Execute your provided SQL to create the target table
+        // 4. Ejecuta el SQL proporcionado para crear la tabla Historias_Clinicas
         $sql = "
             CREATE TABLE Historias_Clinicas (
                 id_consulta INT AUTO_INCREMENT PRIMARY KEY,
@@ -55,7 +55,7 @@ class HistoriasClinicasTest extends TestCase
     }
 
     /**
-     * Clean up after each test to prevent data leakage.
+     * Limpia después de cada prueba para evitar la persistencia de datos.
      */
     protected function tearDown(): void
     {
@@ -68,7 +68,7 @@ class HistoriasClinicasTest extends TestCase
     }
 
     /**
-     * Test: Verify that the table is created with all the expected columns.
+     * Prueba: Verifica que la tabla se cree con todas las columnas esperadas.
      */
     public function testTableExistsAndHasExpectedColumns(): void
     {
@@ -82,21 +82,21 @@ class HistoriasClinicasTest extends TestCase
         ];
 
         foreach ($expectedColumns as $column) {
-            $this->assertContains($column, $columns, "The table is missing the required column: {$column}");
+            $this->assertContains($column, $columns, "A la tabla le falta la columna requerida: {$column}");
         }
     }
 
     /**
-     * Test: Verify that records can be inserted and data maps correctly.
+     * Prueba: Verifica que los registros se pueden insertar y los datos se asignan correctamente.
      */
     public function testCanInsertAndRetrieveRecord(): void
     {
-        // 1. Insert dummy data into the parent tables to satisfy foreign key constraints
+        // 1. Inserta datos de prueba en las tablas padre para satisfacer las llaves foráneas
         $this->db->exec("INSERT INTO Clientes (id_cliente) VALUES ('CLI-001')");
         $this->db->exec("INSERT INTO Pacientes (id_paciente) VALUES ('PAC-001')");
         $this->db->exec("INSERT INTO Doctores (id_doctor) VALUES ('DOC-001')");
 
-        // 2. Prepare and execute the insert for Historias_Clinicas
+        // 2. Prepara y ejecuta la inserción en Historias_Clinicas
         $stmt = $this->db->prepare("
             INSERT INTO Historias_Clinicas 
             (fecha, id_cliente, id_paciente, id_doctor, motivo_consulta, condicion_corporal, diagnostico_dx, plan_accion) 
@@ -114,14 +114,14 @@ class HistoriasClinicasTest extends TestCase
             'Administrar suero y dieta blanda'
         ]);
 
-        // 3. Assert the insertion was successful
-        $this->assertTrue($inserted, "Failed to insert the record into Historias_Clinicas.");
+        // 3. Afirma que la inserción fue exitosa
+        $this->assertTrue($inserted, "Falló la inserción del registro en Historias_Clinicas.");
 
-        // 4. Check if AUTO_INCREMENT is working
+        // 4. Verifica que el AUTO_INCREMENT está funcionando
         $lastId = $this->db->lastInsertId();
-        $this->assertGreaterThan(0, $lastId, "The id_consulta AUTO_INCREMENT failed.");
+        $this->assertGreaterThan(0, $lastId, "El AUTO_INCREMENT de id_consulta falló.");
 
-        // 5. Retrieve the inserted record and verify the data matches
+        // 5. Recupera el registro insertado y verifica que los datos coincidan
         $stmt = $this->db->query("SELECT * FROM Historias_Clinicas WHERE id_consulta = " . $lastId);
         $record = $stmt->fetch(PDO::FETCH_ASSOC);
 
