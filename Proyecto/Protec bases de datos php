@@ -1,0 +1,377 @@
+# config/database.py
+import os
+import logging
+from dotenv import load_dotenv
+from pathlib import Path
+
+# Cargar .env solo en desarrollo
+env_file = Path('.env')
+if env_file.exists() and os.getenv('NODE_ENV') != 'production':
+    load_dotenv()
+    logging.info("Cargando configuración desde .env")
+else:
+    logging.info("Usando variables de entorno del sistema")
+
+class DatabaseConfig:
+    """Configuración segura con validación"""
+    
+    @staticmethod
+    def get_db_url():
+        """Obtiene URL de conexión sin exponer credenciales en logs"""
+        
+        # Intentar desde variables de entorno
+        host = os.getenv('DB_HOST')
+        port = os.getenv('DB_PORT', '3306')
+        database = os.getenv('DB_NAME')
+        user = os.getenv('DB_USER')
+        password = os.getenv('DB_PASSWORD')
+        
+        # Validar que existan credenciales
+        if not all([host, database, user, password]):
+            missing = []
+            if not host: missing.append('DB_HOST')
+            if not database: missing.append('DB_NAME')
+            if not user: missing.append('DB_USER')
+            if not password: missing.append('DB_PASSWORD')
+            
+            raise ValueError(
+                f"Credenciales faltantes: {', '.join(missing)}. "
+                "Revisa tu archivo .env o variables de entorno."
+            )
+        
+        # Construir URL (NUNCA loguear esta URL completa)
+        dialect = os.getenv('DB_DIALECT', 'mysql')
+        url = f"{dialect}://{user}:{password}@{host}:{port}/{database}"
+        
+        # Log seguro (sin password)
+        safe_url = f"{dialect}://{user}:***@{host}:{port}/{database}"
+        logging.info(f"Conectando a: {safe_url}")
+        
+        return url
+    
+    @staticmethod
+    def get_pool_config():
+        """Configuración del pool de conexiones"""
+        return {
+            'pool_size': int(os.getenv('DB_POOL_SIZE', 10)),
+            'max_overflow': int(os.getenv('DB_MAX_OVERFLOW', 20)),
+            'pool_pre_ping': True,
+            'pool_recycle': 3600,  # Reciclar conexiones cada hora
+            'echo': os.getenv('SQL_ECHO', 'false').lower() == 'true'
+        }
+
+# Uso
+DATABASE_URL = DatabaseConfig.get_db_url()
+
+// config/database.js
+const { Sequelize } = require('sequelize');
+require('dotenv').config();
+
+class DatabaseConnection {
+    constructor() {
+        this.validateCredentials();
+        this.sequelize = null;
+    }
+    
+    validateCredentials() {
+        const required = ['DB_HOST', 'DB_NAME', 'DB_USER', 'DB_PASSWORD'];
+        const missing = required.filter(key => !process.env[key]);
+        
+        if (missing.length > 0) {
+            throw new Error(
+                `Credenciales faltantes: ${missing.join(', ')}\n` +
+                `Crea un archivo .env basado en .env.example`
+            );
+        }
+        
+        // Verificar que no esté en producción con credenciales por defecto
+        if (process.env.NODE_ENV === 'production') {
+            const defaultPasswords = ['root', 'password', '123456', 'admin'];
+            if (defaultPasswords.includes(process.env.DB_PASSWORD)) {
+                throw new Error(
+                    'CRÍTICO: No uses contraseñas por defecto en producción'
+                );
+            }
+        }
+    }
+    
+    getConnection() {
+        if (!this.sequelize) {
+            // Log seguro (ocultar password)
+            const safeConfig = {
+                host: process.env.DB_HOST,
+                database: process.env.DB_NAME,
+                user: process.env.DB_USER,
+                password: '****'
+            };
+            console.log('Conectando a BD:', safeConfig);
+            
+            this.sequelize = new Sequelize(
+                process.env.DB_NAME,
+                process.env.DB_USER,
+                process.env.DB_PASSWORD,
+                {
+                    host: process.env.DB_HOST,
+                    port: process.env.DB_PORT || 3306,
+                    dialect: process.env.DB_DIALECT || 'mysql',
+                    pool: {
+                        max: parseInt(process.env.DB_POOL_MAX) || 10,
+                        min: parseInt(process.env.DB_POOL_MIN) || 0,
+                        acquire: 30000,
+                        idle: 10000
+                    },
+                    logging: process.env.NODE_ENV === 'development' 
+                        ? (msg) => console.log('SQL:', msg.replace(/password=[^&]*/g, 'password=***'))
+                        : false
+                }
+            );
+        }
+        return this.sequelize;
+    }
+}
+
+module.exports = new DatabaseConnection();
+
+# config/aws_secrets.py
+import boto3
+import json
+import os
+from botocore.exceptions import ClientError
+
+class SecretsManager:
+    @staticmethod
+    def get_secret(secret_name):
+        """Obtener credenciales desde AWS Secrets Manager"""
+        session = boto3.session.Session()
+        client = session.client(
+            service_name='secretsmanager',
+            region_name=os.getenv('AWS_REGION', 'us-east-1')
+        )
+        
+        try:
+            response = client.get_secret_value(SecretId=secret_name)
+            secret = json.loads(response['SecretString'])
+            return secret
+        except ClientError as e:
+            print(f"Error obteniendo secret: {e}")
+            raise
+
+# Uso en producción
+if os.getenv('NODE_ENV') == 'production':
+    secrets = SecretsManager.get_secret('clinica-db-credentials')
+    DB_CONFIG = {
+        'host': secrets['host'],
+        'user': secrets['username'],
+        'password': secrets['password'],
+        'database': secrets['dbname']
+    }
+else:
+    # En desarrollo usar .env
+    DB_CONFIG = {
+        'host': os.getenv('DB_HOST'),
+        'user': os.getenv('DB_USER'),
+        'password': os.getenv('DB_PASSWORD'),
+        'database': os.getenv('DB_NAME')
+    }
+
+# config/vault.py
+import hvac
+import os
+
+class VaultClient:
+    @staticmethod
+    def get_db_credentials():
+        client = hvac.Client(
+            url=os.getenv('VAULT_ADDR', 'http://vault:8200'),
+            token=os.getenv('VAULT_TOKEN')
+        )
+        
+        secret = client.secrets.kv.v2.read_secret_version(
+            path='database/credentials'
+        )
+        
+        return secret['data']['data']
+
+# config/logging_config.py
+import logging
+import re
+
+class SensitiveDataFilter(logging.Filter):
+    """Filtra información sensible de los logs"""
+    
+    def __init__(self):
+        super().__init__()
+        # Patrones a ocultar
+        self.patterns = [
+            (r'password["\']?\s*[:=]\s*["\']?([^"\'}\s]+)', 'password=***'),
+            (r'pwd["\']?\s*[:=]\s*["\']?([^"\'}\s]+)', 'pwd=***'),
+            (r'token["\']?\s*[:=]\s*["\']?([^"\'}\s]+)', 'token=***'),
+            (r'secret["\']?\s*[:=]\s*["\']?([^"\'}\s]+)', 'secret=***'),
+            (r'api_key["\']?\s*[:=]\s*["\']?([^"\'}\s]+)', 'api_key=***'),
+        ]
+    
+    def filter(self, record):
+        msg = record.getMessage()
+        for pattern, replacement in self.patterns:
+            msg = re.sub(pattern, replacement, msg)
+        record.msg = msg
+        record.args = ()  # Limpiar argumentos
+        return True
+
+# Configurar logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+
+# Agregar filtro a todos los handlers
+for handler in logging.root.handlers:
+    handler.addFilter(SensitiveDataFilter())
+
+# Uso
+logger = logging.getLogger(__name__)
+logger.info(f"Conectando a BD con: {db_url}")  
+
+// utils/logSanitizer.js
+class LogSanitizer {
+    static sanitize(obj) {
+        // Crear copia profunda
+        const sanitized = JSON.parse(JSON.stringify(obj));
+        
+        // Campos a ocultar
+        const sensitiveFields = [
+            'password', 'pwd', 'pass', 'token', 
+            'secret', 'api_key', 'authorization',
+            'access_token', 'refresh_token'
+        ];
+        
+        const sanitizeRecursive = (data) => {
+            if (typeof data !== 'object' || data === null) return data;
+            
+            if (Array.isArray(data)) {
+                return data.map(item => sanitizeRecursive(item));
+            }
+            
+            Object.keys(data).forEach(key => {
+                if (sensitiveFields.includes(key.toLowerCase())) {
+                    data[key] = '***';
+                } else if (typeof data[key] === 'object') {
+                    sanitizeRecursive(data[key]);
+                }
+            });
+            
+            return data;
+        };
+        
+        return sanitizeRecursive(sanitized);
+    }
+    
+    static log(message, data) {
+        const safeData = this.sanitize(data);
+        console.log(message, JSON.stringify(safeData, null, 2));
+    }
+}
+
+// Uso
+LogSanitizer.log('Datos de login:', { 
+    email: 'user@test.com', 
+    password: 'secreta' 
+});
+// Output: Datos de login: { "email": "user@test.com", "password": "***" }
+
+# scripts/check_credentials.py
+import os
+import sys
+
+def check_production_credentials():
+    """Verifica que no haya credenciales por defecto"""
+    if os.getenv('NODE_ENV') != 'production':
+        return True
+    
+    # Lista de passwords inseguros
+    insecure = ['root', 'password', '123456', 'admin', 'test']
+    db_password = os.getenv('DB_PASSWORD', '')
+    
+    if db_password in insecure:
+        print("CRÍTICO: Contraseña insegura en producción!")
+        print("   No uses contraseñas por defecto.")
+        sys.exit(1)
+    
+    # Verificar que las variables existan
+    required = ['DB_HOST', 'DB_NAME', 'DB_USER', 'DB_PASSWORD', 'JWT_SECRET']
+    missing = [v for v in required if not os.getenv(v)]
+    
+    if missing:
+        print(f"Faltan credenciales: {', '.join(missing)}")
+        sys.exit(1)
+    
+    print("Credenciales válidas")
+    return True
+
+if __name__ == "__main__":
+    check_production_credentials()
+
+// scripts/healthcheck.js
+const db = require('../config/database');
+
+async function verifyConnection() {
+    console.log('Verificando conexión a BD...');
+    
+    try {
+        await db.authenticate();
+        console.log('Conexión exitosa');
+        
+        // Verificar que la BD existe
+        await db.query('SELECT 1');
+        console.log('Base de datos accesible');
+        
+        // Verificar tablas críticas
+        const tables = ['Clientes', 'Doctores', 'Pacientes', 'Historias_Clinicas'];
+        for (const table of tables) {
+            const result = await db.query(`SHOW TABLES LIKE '${table}'`);
+            if (result[0].length === 0) {
+                console.warn(`Tabla ${table} no encontrada`);
+            }
+        }
+        
+        console.log('Health check completado');
+    } catch (error) {
+        console.error('Error de conexión:', error.message);
+        process.exit(1);
+    }
+}
+
+verifyConnection();
+
+# middleware/security_middleware.py
+import logging
+from datetime import datetime
+from flask import request, jsonify
+
+logger = logging.getLogger(__name__)
+
+class SecurityMiddleware:
+    @staticmethod
+    def log_requests():
+        """Log seguros de peticiones"""
+        # No loguear passwords en body
+        safe_data = request.get_json() or {}
+        if 'password' in safe_data:
+            safe_data['password'] = '***'
+        
+        logger.info(f"{request.method} {request.path} - Data: {safe_data}")
+    
+    @staticmethod
+    def detect_bruteforce():
+        """Detectar múltiples intentos fallidos"""
+        ip = request.remote_addr
+        # Lógica de rate limiting
+        pass
+
+# En producción: enviar alertas a Slack/Discord
+def send_security_alert(message):
+    """Envía alerta de seguridad"""
+    webhook_url = os.getenv('SLACK_WEBHOOK_URL')
+    if webhook_url:
+        # Enviar a Slack
+        pass
