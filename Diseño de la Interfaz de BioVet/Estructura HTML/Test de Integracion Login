@@ -1,0 +1,38 @@
+// cypress/e2e/login.cy.js
+describe('Login - Integración con Backend Real', () => {
+    beforeEach(() => {
+        // Resetear base de datos (usar transacciones)
+        cy.task('resetDatabase');
+        cy.visit('/login');
+    });
+
+    it('Inicia sesión correctamente', () => {
+        // 1. Crear usuario en BD (desde test)
+        cy.task('crearUsuario', {
+            username: 'testuser',
+            password: 'Test123!',
+            email: 'test@test.com'
+        });
+
+        // 2. Completar formulario
+        cy.get('#username').type('testuser');
+        cy.get('#password').type('Test123!');
+        cy.get('#submitBtn').click();
+
+        // 3. Verificar redirección
+        cy.url().should('include', '/dashboard');
+        cy.window().then((win) => {
+            expect(win.localStorage.getItem('token')).to.exist;
+        });
+    });
+
+    it('Muestra error con credenciales inválidas', () => {
+        cy.get('#username').type('user');
+        cy.get('#password').type('wrong');
+        cy.get('#submitBtn').click();
+
+        cy.get('#errorMessage')
+            .should('be.visible')
+            .and('contain', 'Credenciales inválidas');
+    });
+});
