@@ -1,39 +1,187 @@
+
 <!DOCTYPE html>
-<html lang="en">
+<html lang="es">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Inicio de Sesion</title>
+    <title>Iniciar Sesión</title>
+    <style>
+        /* Estilos básicos para mejor UX */
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
 
-    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600&display=swap">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.3/css/all.min.css">
-    <link rel="stylesheet" href="estilos.css">
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .login-container {
+            background: white;
+            padding: 40px;
+            border-radius: 10px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+            width: 100%;
+            max-width: 400px;
+        }
+
+        .login-container h1 {
+            text-align: center;
+            color: #333;
+            margin-bottom: 30px;
+            font-size: 28px;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 5px;
+            color: #555;
+            font-weight: 600;
+            font-size: 14px;
+        }
+
+        .form-group input {
+            width: 100%;
+            padding: 12px 15px;
+            border: 2px solid #e0e0e0;
+            border-radius: 5px;
+            font-size: 16px;
+            transition: border-color 0.3s;
+        }
+
+        .form-group input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        #errorMessage {
+            background: #fee;
+            color: #c0392b;
+            padding: 10px;
+            border-radius: 5px;
+            margin-bottom: 15px;
+            display: none;
+            font-size: 14px;
+            border-left: 4px solid #c0392b;
+        }
+
+        #submitBtn {
+            width: 100%;
+            padding: 12px;
+            background: #667eea;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.3s, transform 0.1s;
+        }
+
+        #submitBtn:hover:not(:disabled) {
+            background: #5a6fd6;
+        }
+
+        #submitBtn:active:not(:disabled) {
+            transform: scale(0.98);
+        }
+
+        #submitBtn:disabled {
+            background: #a0aec0;
+            cursor: not-allowed;
+            opacity: 0.7;
+        }
+
+        .register-link {
+            text-align: center;
+            margin-top: 20px;
+            color: #777;
+            font-size: 14px;
+        }
+
+        .register-link a {
+            color: #667eea;
+            text-decoration: none;
+            font-weight: 600;
+        }
+
+        .register-link a:hover {
+            text-decoration: underline;
+        }
+
+        /* Spinner para el botón */
+        .spinner {
+            display: inline-block;
+            width: 16px;
+            height: 16px;
+            border: 2px solid rgba(255,255,255,0.3);
+            border-top: 2px solid white;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+            margin-right: 8px;
+            vertical-align: middle;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
 </head>
 <body>
-    <div class="login-box">
-        <form id="loginform">
-            <h2>Login</h2>
+    <div class="login-container">
+        <h1>Iniciar Sesión</h1>
+        
+        <!-- Mensaje de error (oculto por defecto) -->
+        <div id="errorMessage"></div>
 
-            <div class="input-group">
-                <i class="fas fa-user"></i>
-                <input type="text" placeholder="Username" required>
-                <label>Usuario</label>
+        <!-- Formulario con IDs correctos -->
+        <form id="loginForm">
+            <div class="form-group">
+                <label for="username"> Usuario</label>
+                <input 
+                    type="text" 
+                    id="username" 
+                    name="username" 
+                    placeholder="Ingresa tu usuario"
+                    required
+                    autofocus
+                >
             </div>
 
-            <div class="input-group">
-                <i class="fas fa-lock"></i>
-                <input type="password" placeholder="Password" required>
-                <label>Contraseña</label>
+            <div class="form-group">
+                <label for="password"> Contraseña</label>
+                <input 
+                    type="password" 
+                    id="password" 
+                    name="password" 
+                    placeholder="Ingresa tu contraseña"
+                    required
+                >
             </div>
 
-            <button type="submit" class="login-btn" id="submitBtn">Iniciar Sesión</button>
-
-            <p class="signup-link">
-                Eres nuevo aqui? <a href="#">Crea una cuenta</a>
-            </p>
+            <!-- Botón con ID correcto -->
+            <button type="submit" id="submitBtn">
+                Iniciar Sesión
+            </button>
         </form>
+
+        <div class="register-link">
+            ¿No tienes cuenta? <a href="/register">Regístrate aquí</a>
+        </div>
     </div>
 
+    <!-- Incluir el JavaScript mejorado -->
     <script src="login.js"></script>
 </body>
 </html>
