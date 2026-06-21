@@ -1,0 +1,47 @@
+// login.test.js
+import '@testing-library/jest-dom';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import LoginPage from './LoginPage';
+
+// Mock de window.alert
+const mockAlert = jest.spyOn(window, 'alert').mockImplementation(() => {});
+
+describe('Componente Login - Comportamiento', () => {
+  beforeEach(() => {
+    render(<LoginPage />);
+  });
+
+  test('Muestra mensaje de bienvenida con el nombre de usuario', async () => {
+    const user = userEvent.setup();
+    
+    // 1. Llenar el formulario
+    await user.type(screen.getByLabelText(/usuario/i), 'AnaTest');
+    
+    // 2. Hacer clic en submit
+    await user.click(screen.getByRole('button', { name: /iniciar sesión/i }));
+    
+    // 3. El botón cambia a "Iniciando..."
+    expect(screen.getByText('Iniciando...')).toBeInTheDocument();
+    expect(screen.getByRole('button')).toBeDisabled();
+    
+    // 4. Después de 2 segundos, aparece el alert
+    await waitFor(() => {
+      expect(mockAlert).toHaveBeenCalledWith('Bienvenido, AnaTest!');
+    }, { timeout: 2500 });
+    
+    // 5. El botón vuelve a su estado normal
+    await waitFor(() => {
+      expect(screen.getByText('Iniciar Sesión')).toBeInTheDocument();
+      expect(screen.getByRole('button')).not.toBeDisabled();
+    });
+  });
+
+  test('No envía si los campos están vacíos', async () => {
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: /iniciar sesión/i }));
+    
+    // El alert NO debería llamarse (validación frontend)
+    expect(mockAlert).not.toHaveBeenCalled();
+  });
+});
