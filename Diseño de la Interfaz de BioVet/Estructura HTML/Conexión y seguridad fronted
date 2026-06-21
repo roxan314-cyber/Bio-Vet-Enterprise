@@ -1,0 +1,285 @@
+// backend/server.js
+const express = require('express');
+const path = require('path');
+const app = express();
+
+// Mapeo de rutas HTML (oculta extensiones y ubicación)
+app.get('/login', (req, res) => {
+    res.sendFile(path.join(__dirname, 'public', 'login.html'));
+});
+
+app.get('/inicio', (req, res) => {
+    res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
+// Redirección de raíz a /inicio
+app.get('/', (req, res) => {
+    res.redirect('/inicio');
+});
+
+// Mapeo de CSS (oculta nombres de carpetas reales)
+app.get('/css/estilos', (req, res) => {
+    res.sendFile(path.join(__dirname, 'public', 'Estilos CSS', 'styleweb.css'));
+});
+
+// Mapeo de JavaScript (oculta estructura)
+app.get('/js/scripts', (req, res) => {
+    res.sendFile(path.join(__dirname, 'public', 'Codigo JS', 'script.js'));
+});
+
+app.get('/js/login', (req, res) => {
+    res.sendFile(path.join(__dirname, 'public', 'login.js'));
+});
+
+// Mapeo de imágenes (oculta rutas reales)
+app.get('/imagenes/logo', (req, res) => {
+    res.sendFile(path.join(__dirname, 'public', 'imgweb', 'logo.jpg'));
+});
+
+app.get('/imagenes/icono', (req, res) => {
+    res.sendFile(path.join(__dirname, 'public', 'imgweb', 'icono.jpg'));
+});
+
+app.use('/Estilos CSS', express.static('public/Estilos CSS'));
+app.use('/Codigo JS', express.static('public/Codigo JS'));
+app.use('/imgweb', express.static('public/imgweb'));
+
+const staticOptions = {
+    maxAge: '7d',
+    setHeaders: (res, path) => {
+        res.setHeader('X-Content-Type-Options', 'nosniff');
+    }
+};
+
+// Alias: /recursos → carpeta pública
+app.use('/recursos', express.static('public', staticOptions));
+
+app.use('/estilos', express.static('public/Estilos CSS', staticOptions));
+app.use('/scripts', express.static('public/Codigo JS', staticOptions));
+app.use('/imagenes', express.static('public/imgweb', staticOptions));
+
+// backend/utils/hash.js
+const crypto = require('crypto');
+const fs = require('fs');
+
+// Generar hash del contenido del archivo
+function generarHash(archivo) {
+    const contenido = fs.readFileSync(archivo);
+    return crypto.createHash('md5').update(contenido).digest('hex').substring(0, 8);
+}
+
+// Ejemplo: /css/estilos?v=abc123def
+app.get('/css/estilos', (req, res) => {
+    const hash = generarHash(path.join(__dirname, 'public/Estilos CSS/styleweb.css'));
+    res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+    res.sendFile(path.join(__dirname, 'public/Estilos CSS', 'styleweb.css'));
+});
+
+// En el HTML
+// <link rel="stylesheet" href="/css/estilos?v=abc123def">
+
+// backend/views/login.ejs (usando EJS)
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title><%= titulo %></title>
+    <link rel="stylesheet" href="/estilos/login">
+</head>
+<body>
+    <div class="login-container">
+        <h1><%= titulo %></h1>
+        <div id="errorMessage"></div>
+        <form id="loginForm" action="/api/login" method="POST">
+            <div class="form-group">
+                <label for="username">Usuario</label>
+                <input type="text" id="username" name="username" required>
+            </div>
+            <div class="form-group">
+                <label for="password">Contraseña</label>
+                <input type="password" id="password" name="password" required>
+            </div>
+            <button type="submit" id="submitBtn">Iniciar Sesión</button>
+        </form>
+        <div class="register-link">
+            ¿No tienes cuenta? <a href="/registro">Regístrate aquí</a>
+        </div>
+    </div>
+    <script src="/scripts/login"></script>
+</body>
+</html>
+
+// backend/server.js
+app.set('view engine', 'ejs');
+app.set('views', path.join(__dirname, 'views'));
+
+app.get('/login', (req, res) => {
+    res.render('login', { 
+        titulo: 'BioVet - Iniciar Sesión' 
+    });
+});
+
+// backend/routes/imagenes.js
+const crypto = require('crypto');
+
+// Generar URL firmada para imágenes
+function generarUrlImagen(nombreArchivo, usuarioId) {
+    const timestamp = Date.now();
+    const firma = crypto
+        .createHmac('sha256', process.env.IMAGEN_SECRET)
+        .update(`${nombreArchivo}${timestamp}${usuarioId}`)
+        .digest('hex')
+        .substring(0, 16);
+    
+    return `/img/${firma}/${timestamp}/${nombreArchivo}`;
+}
+
+// Servir imagen con verificación
+app.get('/img/:firma/:timestamp/:archivo', (req, res) => {
+    const { firma, timestamp, archivo } = req.params;
+    
+    // Verificar firma
+    const firmaEsperada = crypto
+        .createHmac('sha256', process.env.IMAGEN_SECRET)
+        .update(`${archivo}${timestamp}${req.usuario?.id || 'anonimo'}`)
+        .digest('hex')
+        .substring(0, 16);
+    
+    if (firma !== firmaEsperada) {
+        return res.status(403).send('Acceso denegado');
+    }
+    
+    // Verificar expiración (24 horas)
+    if (Date.now() - parseInt(timestamp) > 86400000) {
+        return res.status(410).send('URL expirada');
+    }
+    
+    // Servir imagen (mapeo interno)
+    const mapaImagenes = {
+        'logo.jpg': 'public/imgweb/logo.jpg',
+        'icono.jpg': 'public/imgweb/icono.jpg'
+    };
+    
+    const rutaReal = mapaImagenes[archivo];
+    if (!rutaReal) {
+        return res.status(404).send('Imagen no encontrada');
+    }
+    
+    res.sendFile(path.join(__dirname, '..', rutaReal));
+});
+
+// Uso en vista:
+// <img src="/img/abc123/1234567890/logo.jpg" />
+
+// backend/middlewares/headers.js
+const helmet = require('helmet');
+
+app.use(helmet({
+    // Ocultar versión de Express
+    hidePoweredBy: true,
+    
+    // Prevenir sniffing de MIME
+    noSniff: true,
+    
+    // Controlar qué recursos puede cargar el frontend
+    contentSecurityPolicy: {
+        directives: {
+            defaultSrc: ["'self'"],
+            scriptSrc: ["'self'", "https://unpkg.com"],
+            styleSrc: ["'self'", "https://fonts.googleapis.com", "https://cdnjs.cloudflare.com"],
+            fontSrc: ["'self'", "https://fonts.gstatic.com", "https://cdnjs.cloudflare.com"],
+            imgSrc: ["'self'", "data:"],
+        }
+    }
+}));
+
+// Headers adicionales
+app.use((req, res, next) => {
+    // No revelar qué servidor usamos
+    res.removeHeader('X-Powered-By');
+    
+    // Cache control para evitar que se guarden rutas sensibles
+    if (req.path.startsWith('/api/')) {
+        res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+    }
+    
+    next();
+});
+
+// backend/scripts/build.js (ejemplo con esbuild)
+const esbuild = require('esbuild');
+
+// Minificar CSS
+const cssnano = require('cssnano');
+const postcss = require('postcss');
+
+// Construir assets con nombres hasheados
+async function build() {
+    // 1. Minificar JavaScript
+    await esbuild.build({
+        entryPoints: ['public/Codigo JS/script.js'],
+        bundle: true,
+        minify: true,
+        outfile: 'dist/scripts/app.min.js',
+        target: ['es2015']
+    });
+    
+    // 2. Minificar CSS
+    const css = fs.readFileSync('public/Estilos CSS/styleweb.css');
+    const result = await postcss([cssnano]).process(css);
+    fs.writeFileSync('dist/estilos/app.min.css', result.css);
+    
+    // 3. Generar mapa de archivos
+    const manifest = {
+        'scripts/app.js': 'dist/scripts/app.min.js',
+        'estilos/app.css': 'dist/estilos/app.min.css'
+    };
+    fs.writeFileSync('dist/manifest.json', JSON.stringify(manifest));
+}
+
+// En las vistas, usar el manifest:
+// <link rel="stylesheet" href="/estilos/app.css?v=123">
+// <script src="/scripts/app.js?v=456"></script>
+
+// backend/server.js (configuración completa)
+const express = require('express');
+const path = require('path');
+const helmet = require('helmet');
+const app = express();
+
+// 1. Seguridad y headers
+app.use(helmet({
+    hidePoweredBy: true,
+    noSniff: true
+}));
+app.disable('x-powered-by');
+
+// 2. Rutas públicas con alias
+app.use('/estilos', express.static('public/Estilos CSS'));
+app.use('/scripts', express.static('public/Codigo JS'));
+app.use('/imagenes', express.static('public/imgweb'));
+
+// 3. Rutas de páginas (oculta extensión .html)
+app.get('/inicio', (req, res) => {
+    res.sendFile(path.join(__dirname, 'public/index.html'));
+});
+
+app.get('/login', (req, res) => {
+    res.sendFile(path.join(__dirname, 'public/login.html'));
+});
+
+app.get('/', (req, res) => res.redirect('/inicio'));
+
+// 4. API (con /api para distinguir de páginas)
+app.use('/api', require('./routes/api'));
+
+// 5. Manejo de errores
+app.use((req, res) => {
+    res.status(404).sendFile(path.join(__dirname, 'public/404.html'));
+});
+
+// 6. Iniciar servidor
+app.listen(3000, () => {
+    console.log('Servidor corriendo en puerto 3000');
+});
