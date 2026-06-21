@@ -1,0 +1,56 @@
+// login.js (con spinner)
+document.addEventListener('DOMContentLoaded', () => {
+    const loginForm = document.getElementById('loginForm');
+    const errorMessage = document.getElementById('errorMessage');
+    const submitBtn = document.getElementById('submitBtn');
+
+    loginForm.addEventListener('submit', async function (e) {
+        e.preventDefault();
+
+        const username = document.getElementById('username').value;
+        const password = document.getElementById('password').value;
+
+        // Validación frontend
+        if (!username || !password) {
+            errorMessage.textContent = 'Todos los campos son obligatorios';
+            errorMessage.style.display = 'block';
+            return;
+        }
+
+        // Cambiar estado del botón (con spinner)
+        submitBtn.innerHTML = `
+            <span class="spinner"></span> Iniciando...
+        `;
+        submitBtn.disabled = true;
+        errorMessage.style.display = 'none';
+
+        try {
+            const response = await fetch('/api/login', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ username, password })
+            });
+
+            const data = await response.json();
+
+            if (!response.ok) {
+                throw new Error(data.error || 'Error al iniciar sesión');
+            }
+
+            // Guardar token
+            localStorage.setItem('token', data.token);
+            localStorage.setItem('usuario', JSON.stringify(data.usuario));
+
+            // Redirigir
+            window.location.href = '/dashboard';
+
+        } catch (error) {
+            errorMessage.textContent = error.message;
+            errorMessage.style.display = 'block';
+        } finally {
+            // Restaurar botón (sin spinner)
+            submitBtn.innerHTML = 'Iniciar Sesión';
+            submitBtn.disabled = false;
+        }
+    });
+});
