@@ -1,0 +1,14 @@
+// homePage.test.js
+import '@testing-library/jest-dom';
+import { render, screen } from '@testing-library/react';
+import HomePage from './HomePage';
+
+test('los títulos tienen la clase de animación de ScrollReveal', () => {
+  render(<HomePage />);
+  
+  const titulo = screen.getByRole('heading', { name: /quiénes somos/i });
+  expect(titulo.closest('.card')).toBeInTheDocument();
+  
+  const servicios = screen.getAllByTestId('servicio-card');
+  expect(servicios[0]).toHaveClass('servicio-card');
+});
