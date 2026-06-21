@@ -1,0 +1,364 @@
+// backend/middlewares/security.js
+const rateLimit = require('express-rate-limit');
+const helmet = require('helmet');
+const cors = require('cors');
+
+// Rate Limiting - Evita ataques de fuerza bruta
+const limiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minutos
+    max: 100, // 100 peticiones por IP
+    message: { error: 'Demasiadas peticiones, intenta más tarde' },
+    standardHeaders: true,
+    legacyHeaders: false,
+});
+
+// Aplicar a rutas sensibles
+app.use('/api/login', limiter);
+app.use('/api/register', limiter);
+app.use('/api/contacto', limiter);
+
+// Helmet - Protege contra vulnerabilidades web
+app.use(helmet({
+    contentSecurityPolicy: {
+        directives: {
+            defaultSrc: ["'self'"],
+            scriptSrc: ["'self'", "https://unpkg.com"], // ScrollReveal
+            styleSrc: ["'self'", "https://fonts.googleapis.com", "https://cdnjs.cloudflare.com"],
+            fontSrc: ["'self'", "https://fonts.gstatic.com", "https://cdnjs.cloudflare.com"],
+            imgSrc: ["'self'", "data:"],
+        }
+    }
+}));
+
+// CORS - Controla qué dominios pueden acceder
+app.use(cors({
+    origin: process.env.FRONTEND_URL || 'http://localhost:3000',
+    credentials: true,
+    optionsSuccessStatus: 200
+}));
+
+// Sanitización de entradas
+const sanitize = require('express-validator');
+app.use(sanitize());
+
+// backend/routes/contacto.js
+const { body, validationResult } = require('express-validator');
+
+app.post('/api/contacto', [
+    // Validación estricta de campos
+    body('nombre')
+        .trim()
+        .isLength({ min: 2, max: 50 })
+        .escape()
+        .withMessage('Nombre inválido'),
+    
+    body('apellido')
+        .trim()
+        .isLength({ min: 2, max: 50 })
+        .escape()
+        .withMessage('Apellido inválido'),
+    
+    body('email')
+        .trim()
+        .isEmail()
+        .normalizeEmail()
+        .withMessage('Email inválido'),
+    
+    body('mensaje')
+        .trim()
+        .isLength({ min: 10, max: 1000 })
+        .escape()
+        .withMessage('Mensaje demasiado corto o largo'),
+    
+    // Protección contra spam (CAPTCHA)
+    body('captcha')
+        .optional()
+        .isString()
+], async (req, res) => {
+    // Verificar errores de validación
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+        return res.status(400).json({ 
+            errors: errors.array() 
+        });
+    }
+
+    try {
+        // Verificar CAPTCHA (reCAPTCHA v3)
+        const captchaResponse = req.body.captcha;
+        if (captchaResponse) {
+            const verification = await fetch(
+                `https://www.google.com/recaptcha/api/siteverify`,
+                {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                    body: `secret=${process.env.RECAPTCHA_SECRET}&response=${captchaResponse}`
+                }
+            );
+            const data = await verification.json();
+            if (!data.success || data.score < 0.5) {
+                return res.status(403).json({ 
+                    error: 'Verificación CAPTCHA fallida' 
+                });
+            }
+        }
+
+        // Guardar mensaje en BD
+        await db.query(
+            `INSERT INTO mensajes_contacto 
+             (nombre, apellido, email, mensaje, ip, user_agent, fecha) 
+             VALUES ($1, $2, $3, $4, $5, $6, NOW())`,
+            [
+                req.body.nombre,
+                req.body.apellido,
+                req.body.email,
+                req.body.mensaje,
+                req.ip,
+                req.headers['user-agent']
+            ]
+        );
+
+        // Enviar notificación al equipo (email, Slack, etc.)
+        await enviarNotificacion(req.body);
+
+        res.json({ 
+            success: true, 
+            mensaje: 'Mensaje enviado correctamente' 
+        });
+
+    } catch (error) {
+        console.error('Error en contacto:', error);
+        res.status(500).json({ 
+            error: 'Error al enviar el mensaje' 
+        });
+    }
+});
+
+// backend/server.js
+const path = require('path');
+const express = require('express');
+
+// Servir archivos estáticos con seguridad
+app.use('/css', express.static(path.join(__dirname, 'public/Estilos CSS'), {
+    maxAge: '7d', // Cache de 7 días
+    etag: true,
+    lastModified: true,
+    setHeaders: (res, path) => {
+        // Prevenir MIME sniffing
+        res.setHeader('X-Content-Type-Options', 'nosniff');
+        
+        // Cache control para archivos CSS
+        if (path.endsWith('.css')) {
+            res.setHeader('Content-Type', 'text/css');
+        }
+    }
+}));
+
+app.use('/js', express.static(path.join(__dirname, 'public/Codigo JS'), {
+    maxAge: '1d',
+    setHeaders: (res) => {
+        res.setHeader('X-Content-Type-Options', 'nosniff');
+    }
+}));
+
+app.use('/imgweb', express.static(path.join(__dirname, 'public/imgweb'), {
+    maxAge: '30d',
+    setHeaders: (res, path) => {
+        if (path.endsWith('.jpg') || path.endsWith('.png')) {
+            res.setHeader('Cache-Control', 'public, max-age=2592000');
+        }
+    }
+}));
+
+// Prevenir acceso a archivos sensibles
+app.use((req, res, next) => {
+    if (req.path.includes('.env') || req.path.includes('.git')) {
+        return res.status(403).send('Acceso denegado');
+    }
+    next();
+});
+
+// backend/middlewares/auth.js
+const jwt = require('jsonwebtoken');
+const bcrypt = require('bcrypt');
+
+// Registro de usuario seguro
+app.post('/api/register', async (req, res) => {
+    const { username, email, password } = req.body;
+
+    // Validar contraseña fuerte
+    const passwordRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$/;
+    if (!passwordRegex.test(password)) {
+        return res.status(400).json({
+            error: 'La contraseña debe tener 8+ caracteres, mayúscula, minúscula, número y símbolo'
+        });
+    }
+
+    // Hash de contraseña
+    const salt = await bcrypt.genSalt(12);
+    const passwordHash = await bcrypt.hash(password, salt);
+
+    // Guardar en BD
+    try {
+        const result = await db.query(
+            `INSERT INTO usuarios (username, email, password_hash) 
+             VALUES ($1, $2, $3) RETURNING id, username, email`,
+            [username, email, passwordHash]
+        );
+
+        res.status(201).json({
+            success: true,
+            usuario: result.rows[0]
+        });
+    } catch (error) {
+        if (error.code === '23505') { // Unique violation
+            return res.status(409).json({
+                error: 'El usuario o email ya existe'
+            });
+        }
+        res.status(500).json({ error: 'Error al registrar usuario' });
+    }
+});
+
+// Login seguro
+app.post('/api/login', [
+    body('username').trim().escape(),
+    body('password').isLength({ min: 1 })
+], async (req, res) => {
+    const { username, password } = req.body;
+
+    // Buscar usuario
+    const result = await db.query(
+        'SELECT id, username, password_hash FROM usuarios WHERE username = $1',
+        [username]
+    );
+
+    if (result.rows.length === 0) {
+        // Tiempo de respuesta constante (evita enumeración)
+        await bcrypt.compare(password, '$2b$12$fakehashparaevitarfugas');
+        return res.status(401).json({ error: 'Credenciales inválidas' });
+    }
+
+    const usuario = result.rows[0];
+    const passwordValida = await bcrypt.compare(password, usuario.password_hash);
+
+    if (!passwordValida) {
+        return res.status(401).json({ error: 'Credenciales inválidas' });
+    }
+
+    // Generar JWT con expiración
+    const token = jwt.sign(
+        { id: usuario.id, username: usuario.username },
+        process.env.JWT_SECRET,
+        { expiresIn: '1h' }
+    );
+
+    // Guardar sesión en Redis (para poder invalidar)
+    await redisClient.set(
+        `session:${usuario.id}`,
+        token,
+        { EX: 3600 } // 1 hora
+    );
+
+    // Log de actividad
+    await db.query(
+        `INSERT INTO logs_login (usuario_id, ip, user_agent, fecha) 
+         VALUES ($1, $2, $3, NOW())`,
+        [usuario.id, req.ip, req.headers['user-agent']]
+    );
+
+    res.json({
+        success: true,
+        token,
+        usuario: {
+            id: usuario.id,
+            username: usuario.username
+        }
+    });
+});
+
+// backend/middlewares/security.js
+
+// Prevenir SQL Injection (usar siempre parametrizado)
+const query = 'SELECT * FROM usuarios WHERE email = $1';
+const values = [req.body.email];
+await db.query(query, values);
+
+// Prevenir XSS (sanitizar salida)
+const sanitizeHtml = require('sanitize-html');
+const mensajeLimpio = sanitizeHtml(req.body.mensaje, {
+    allowedTags: [],
+    allowedAttributes: {},
+});
+
+// Prevenir CSRF (usar tokens en formularios)
+const csrf = require('csrf');
+const tokens = new csrf();
+
+// Generar token en backend
+app.get('/api/csrf-token', (req, res) => {
+    const secret = tokens.secretSync();
+    const token = tokens.create(secret);
+    req.session.csrfSecret = secret;
+    res.json({ token });
+});
+
+// Verificar token en POST
+app.post('/api/contacto', (req, res) => {
+    const { csrfToken } = req.body;
+    if (!tokens.verify(req.session.csrfSecret, csrfToken)) {
+        return res.status(403).json({ error: 'CSRF token inválido' });
+    }
+    // ... procesar
+});
+
+// Prevenir clickjacking
+app.use((req, res, next) => {
+    res.setHeader('X-Frame-Options', 'DENY');
+    res.setHeader('X-XSS-Protection', '1; mode=block');
+    res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+    next();
+});
+
+// backend/middlewares/errorHandler.js
+app.use((err, req, res, next) => {
+    // No exponer detalles internos en producción
+    const errorResponse = process.env.NODE_ENV === 'production' 
+        ? { error: 'Error interno del servidor' }
+        : { error: err.message, stack: err.stack };
+
+    // Loggear error internamente
+    console.error({
+        timestamp: new Date().toISOString(),
+        error: err.message,
+        stack: err.stack,
+        path: req.path,
+        method: req.method,
+        ip: req.ip,
+        userAgent: req.headers['user-agent']
+    });
+
+    res.status(err.status || 500).json(errorResponse);
+});
+
+// backend/middlewares/index.js
+const securityMiddleware = [
+    helmet(),
+    cors({ origin: process.env.FRONTEND_URL }),
+    express.json({ limit: '1mb' }),
+    express.urlencoded({ extended: true, limit: '1mb' }),
+    rateLimit({ windowMs: 15 * 60 * 1000, max: 100 }),
+    
+    // Prevenir ataques de fuerza bruta en login
+    (req, res, next) => {
+        if (req.path === '/api/login') {
+            // Verificar intentos fallidos por IP
+            const ip = req.ip;
+            const key = `failed_login:${ip}`;
+            // ... implementar con Redis
+        }
+        next();
+    }
+];
+
+app.use(securityMiddleware);
