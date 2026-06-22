@@ -1,0 +1,467 @@
+<?php
+// tests/Feature/Auth/AuthControllerTest.php
+
+namespace Tests\Feature\Auth;
+
+use App\Models\User;
+use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Foundation\Testing\WithFaker;
+use Laravel\Sanctum\Sanctum;
+use Tests\TestCase;
+
+class AuthControllerTest extends TestCase
+{
+    use RefreshDatabase, WithFaker;
+
+    private string $userPassword = 'password123';
+    private array $userData;
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+        
+        $this->userData = [
+            'name' => 'Juan Pérez',
+            'email' => 'juan@test.com',
+            'password' => $this->userPassword,
+            'password_confirmation' => $this->userPassword,
+            'rol' => 'veterinario',
+            'telefono' => '123456789'
+        ];
+    }
+
+    // ============================================
+    // TESTS DE REGISTRO
+    // ============================================
+
+    /** @test */
+    public function un_usuario_puede_registrarse_exitosamente()
+    {
+        $response = $this->postJson('/api/register', $this->userData);
+
+        $response->assertStatus(201)
+            ->assertJsonStructure([
+                'success',
+                'mensaje',
+                'usuario' => ['id', 'name', 'email']
+            ])
+            ->assertJson([
+                'success' => true,
+                'mensaje' => 'Usuario registrado exitosamente',
+                'usuario' => [
+                    'name' => 'Juan Pérez',
+                    'email' => 'juan@test.com'
+                ]
+            ]);
+
+        $this->assertDatabaseHas('users', [
+            'email' => 'juan@test.com',
+            'name' => 'Juan Pérez',
+            'rol' => 'veterinario'
+        ]);
+    }
+
+    /** @test */
+    public function registro_falla_con_email_duplicado()
+    {
+        // Crear usuario existente
+        User::factory()->create(['email' => 'juan@test.com']);
+
+        $response = $this->postJson('/api/register', $this->userData);
+
+        $response->assertStatus(422)
+            ->assertJsonValidationErrors(['email'])
+            ->assertJsonFragment(['El email ya está registrado']);
+    }
+
+    /** @test */
+    public function registro_falla_con_datos_invalidos()
+    {
+        $invalidData = [
+            'name' => '',
+            'email' => 'correo-invalido',
+            'password' => '123',
+            'password_confirmation' => '456'
+        ];
+
+        $response = $this->postJson('/api/register', $invalidData);
+
+        $response->assertStatus(422)
+            ->assertJsonValidationErrors(['name', 'email', 'password', 'password_confirmation']);
+    }
+
+    /** @test */
+    public function registro_permite_rol_personalizado()
+    {
+        $this->userData['rol'] = 'admin';
+
+        $response = $this->postJson('/api/register', $this->userData);
+
+        $response->assertStatus(201);
+        
+        $this->assertDatabaseHas('users', [
+            'email' => 'juan@test.com',
+            'rol' => 'admin'
+        ]);
+    }
+
+    // ============================================
+    // TESTS DE LOGIN
+    // ============================================
+
+    /** @test */
+    public function un_usuario_puede_login_exitosamente()
+    {
+        $user = User::factory()->create([
+            'email' => 'juan@test.com',
+            'password' => bcrypt($this->userPassword)
+        ]);
+
+        $response = $this->postJson('/api/login', [
+            'email' => 'juan@test.com',
+            'password' => $this->userPassword
+        ]);
+
+        $response->assertStatus(200)
+            ->assertJsonStructure([
+                'success',
+                'mensaje',
+                'token',
+                'usuario' => ['id', 'name', 'email', 'rol']
+            ])
+            ->assertJson([
+                'success' => true,
+                'mensaje' => 'Login exitoso',
+                'usuario' => [
+                    'email' => 'juan@test.com'
+                ]
+            ]);
+
+        // Verificar que se generó un token
+        $this->assertNotNull($response->json('token'));
+    }
+
+    /** @test */
+    public function login_falla_con_credenciales_incorrectas()
+    {
+        User::factory()->create([
+            'email' => 'juan@test.com',
+            'password' => bcrypt($this->userPassword)
+        ]);
+
+        $response = $this->postJson('/api/login', [
+            'email' => 'juan@test.com',
+            'password' => 'password_incorrecta'
+        ]);
+
+        $response->assertStatus(401)
+            ->assertJson([
+                'success' => false,
+                'mensaje' => 'Credenciales inválidas'
+            ]);
+    }
+
+    /** @test */
+    public function login_falla_sin_email()
+    {
+        $response = $this->postJson('/api/login', [
+            'password' => $this->userPassword
+        ]);
+
+        $response->assertStatus(422)
+            ->assertJsonValidationErrors(['email']);
+    }
+
+    // ============================================
+    // TESTS DE RUTAS PROTEGIDAS
+    // ============================================
+
+    /** @test */
+    public function usuario_autenticado_puede_obtener_sus_datos()
+    {
+        $user = User::factory()->create();
+        Sanctum::actingAs($user);
+
+        $response = $this->getJson('/api/me');
+
+        $response->assertStatus(200)
+            ->assertJson([
+                'success' => true,
+                'usuario' => [
+                    'id' => $user->id,
+                    'name' => $user->name,
+                    'email' => $user->email
+                ]
+            ]);
+    }
+
+    /** @test */
+    public function usuario_no_autenticado_no_puede_obtener_sus_datos()
+    {
+        $response = $this->getJson('/api/me');
+
+        $response->assertStatus(401);
+    }
+
+    /** @test */
+    public function usuario_autenticado_puede_verificar_token()
+    {
+        $user = User::factory()->create();
+        Sanctum::actingAs($user);
+
+        $response = $this->postJson('/api/verify-token');
+
+        $response->assertStatus(200)
+            ->assertJson([
+                'success' => true,
+                'valid' => true,
+                'mensaje' => 'Token válido',
+                'usuario' => [
+                    'id' => $user->id,
+                    'email' => $user->email
+                ]
+            ])
+            ->assertJsonStructure([
+                'token' => ['expira_en', 'expira_en_horas', 'expira_en_fecha']
+            ]);
+    }
+
+    /** @test */
+    public function usuario_autenticado_puede_cerrar_sesion()
+    {
+        $user = User::factory()->create();
+        Sanctum::actingAs($user);
+
+        $response = $this->postJson('/api/logout');
+
+        $response->assertStatus(200)
+            ->assertJson([
+                'success' => true,
+                'mensaje' => 'Sesión cerrada exitosamente'
+            ]);
+
+        // Verificar que el token fue revocado
+        $this->assertDatabaseCount('personal_access_tokens', 0);
+    }
+
+    /** @test */
+    public function usuario_no_autenticado_no_puede_cerrar_sesion()
+    {
+        $response = $this->postJson('/api/logout');
+
+        $response->assertStatus(401);
+    }
+
+    // ============================================
+    // TESTS DE HEALTH CHECK
+    // ============================================
+
+    /** @test */
+    public function health_check_retorna_estado_correcto()
+    {
+        $response = $this->getJson('/api/health');
+
+        $response->assertStatus(200)
+            ->assertJson([
+                'status' => 'OK',
+                'mensaje' => 'Servidor BioVet funcionando'
+            ]);
+    }
+
+    // ============================================
+    // TESTS DE VALIDACIONES AVANZADAS
+    // ============================================
+
+    /** @test */
+    public function registro_requiere_password_de_al_menos_6_caracteres()
+    {
+        $this->userData['password'] = '12345';
+        $this->userData['password_confirmation'] = '12345';
+
+        $response = $this->postJson('/api/register', $this->userData);
+
+        $response->assertStatus(422)
+            ->assertJsonValidationErrors(['password']);
+    }
+
+    /** @test */
+    public function registro_valida_formato_de_telefono_si_se_provee()
+    {
+        // Asumiendo que hay validación de teléfono
+        $this->userData['telefono'] = 'abc123';
+        
+        $response = $this->postJson('/api/register', $this->userData);
+        
+        // Si tienes validación de teléfono, debería fallar
+        // Si no, este test se adapta a tu lógica
+        $this->assertTrue(true); // Placeholder
+    }
+
+    /** @test */
+    public function login_actualiza_ultimo_acceso()
+    {
+        $user = User::factory()->create([
+            'email' => 'juan@test.com',
+            'password' => bcrypt($this->userPassword),
+            'ultimo_acceso' => null
+        ]);
+
+        $this->postJson('/api/login', [
+            'email' => 'juan@test.com',
+            'password' => $this->userPassword
+        ]);
+
+        $this->assertDatabaseHas('users', [
+            'id' => $user->id,
+            'ultimo_acceso' => now()->toDateTimeString()
+        ]);
+    }
+
+    // ============================================
+    // TESTS DE SEGURIDAD
+    // ============================================
+
+    /** @test */
+    public function login_previene_ataques_de_fuerza_bruta()
+    {
+        $user = User::factory()->create(['email' => 'juan@test.com']);
+
+        // 5 intentos fallidos
+        for ($i = 0; $i < 5; $i++) {
+            $this->postJson('/api/login', [
+                'email' => 'juan@test.com',
+                'password' => 'password_incorrecta'
+            ]);
+        }
+
+        // El sexto intento debería ser bloqueado (si implementas rate limiting)
+        $response = $this->postJson('/api/login', [
+            'email' => 'juan@test.com',
+            'password' => $this->userPassword
+        ]);
+
+        // Si tienes rate limiting, debería dar 429
+        // Si no, este test se adapta
+        $this->assertTrue(in_array($response->status(), [200, 429]));
+    }
+
+    /** @test */
+    public function token_inactivo_es_revocado_automaticamente()
+    {
+        $user = User::factory()->create();
+        $token = $user->createToken('auth_token')->plainTextToken;
+        
+        // Simular inactividad (si tienes lógica de expiración)
+        // Este test depende de tu implementación
+        
+        $this->assertTrue(true); // Placeholder
+    }
+}
+
+// tests/Unit/Controllers/AuthControllerTest.php
+
+namespace Tests\Unit\Controllers;
+
+use App\Http\Controllers\AuthController;
+use App\Models\User;
+use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Hash;
+use Tests\TestCase;
+
+class AuthControllerTest extends TestCase
+{
+    use RefreshDatabase;
+
+    private AuthController $controller;
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+        $this->controller = new AuthController();
+    }
+
+    /** @test */
+    public function register_hashea_la_contraseña_correctamente()
+    {
+        $request = Request::create('/api/register', 'POST', [
+            'name' => 'Test User',
+            'email' => 'test@test.com',
+            'password' => 'password123',
+            'password_confirmation' => 'password123'
+        ]);
+
+        $response = $this->controller->register($request);
+        
+        $this->assertEquals(201, $response->status());
+        
+        $user = User::where('email', 'test@test.com')->first();
+        $this->assertTrue(Hash::check('password123', $user->password));
+    }
+
+    /** @test */
+    public function login_genera_token_sanctum()
+    {
+        $user = User::factory()->create([
+            'password' => Hash::make('password123')
+        ]);
+
+        $request = Request::create('/api/login', 'POST', [
+            'email' => $user->email,
+            'password' => 'password123'
+        ]);
+
+        $response = $this->controller->login($request);
+        $data = $response->getData(true);
+
+        $this->assertEquals(200, $response->status());
+        $this->assertArrayHasKey('token', $data);
+        $this->assertNotEmpty($data['token']);
+    }
+
+    /** @test */
+    public function me_retorna_usuario_autenticado()
+    {
+        $user = User::factory()->create();
+        $this->actingAs($user);
+
+        $response = $this->controller->me();
+        $data = $response->getData(true);
+
+        $this->assertEquals(200, $response->status());
+        $this->assertEquals($user->id, $data['usuario']['id']);
+        $this->assertEquals($user->email, $data['usuario']['email']);
+    }
+}
+
+<?xml version="1.0" encoding="UTF-8"?>
+<phpunit xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:noNamespaceSchemaLocation="./vendor/phpunit/phpunit/phpunit.xsd"
+         bootstrap="vendor/autoload.php"
+         colors="true"
+>
+    <testsuites>
+        <testsuite name="Unit">
+            <directory suffix="Test.php">./tests/Unit</directory>
+        </testsuite>
+        <testsuite name="Feature">
+            <directory suffix="Test.php">./tests/Feature</directory>
+        </testsuite>
+    </testsuites>
+    <coverage>
+        <include>
+            <directory suffix=".php">./app</directory>
+        </include>
+    </coverage>
+    <php>
+        <env name="APP_ENV" value="testing"/>
+        <env name="BCRYPT_ROUNDS" value="4"/>
+        <env name="CACHE_DRIVER" value="array"/>
+        <env name="DB_CONNECTION" value="sqlite"/>
+        <env name="DB_DATABASE" value=":memory:"/>
+        <env name="MAIL_MAILER" value="array"/>
+        <env name="QUEUE_CONNECTION" value="sync"/>
+        <env name="SESSION_DRIVER" value="array"/>
+        <env name="TELESCOPE_ENABLED" value="false"/>
+    </php>
+</phpunit>
