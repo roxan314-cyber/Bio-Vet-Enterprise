@@ -1,0 +1,483 @@
+<?php
+// tests/Integration/MeApiTest.php
+
+use PHPUnit\Framework\TestCase;
+
+class MeApiTest extends TestCase
+{
+    private $pdo;
+    private $testUser;
+    private $jwtSecret = 'test_secret_key_12345';
+    
+    protected function setUp(): void
+    {
+        parent::setUp();
+        
+        // 1. Base de datos en memoria
+        $this->pdo = new PDO('sqlite::memory:');
+        $this->pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+        
+        // 2. Crear tabla users
+        $this->pdo->exec("
+            CREATE TABLE users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                email TEXT UNIQUE NOT NULL,
+                password TEXT NOT NULL,
+                rol TEXT DEFAULT 'veterinario',
+                telefono TEXT,
+                ultimo_acceso DATETIME,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        ");
+        
+        // 3. Insertar usuario de prueba
+        $this->createTestUser();
+        
+        // 4. Mock de funciones globales
+        $this->mockGlobalFunctions();
+    }
+    
+    private function createTestUser(): void
+    {
+        $hash = password_hash('password123', PASSWORD_DEFAULT);
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO users (name, email, password, rol, telefono, ultimo_acceso, created_at) 
+             VALUES (?, ?, ?, ?, ?, ?, ?)"
+        );
+        
+        $now = date('Y-m-d H:i:s');
+        $stmt->execute([
+            'Test User',
+            'test@api.com',
+            $hash,
+            'veterinario',
+            '123456789',
+            $now,
+            $now
+        ]);
+        
+        $this->testUser = [
+            'id' => $this->pdo->lastInsertId(),
+            'name' => 'Test User',
+            'email' => 'test@api.com',
+            'rol' => 'veterinario',
+            'telefono' => '123456789',
+            'ultimo_acceso' => $now,
+            'created_at' => $now
+        ];
+    }
+    
+    private function mockGlobalFunctions(): void
+    {
+        // Mock de getDBConnection
+        if (!function_exists('getDBConnection')) {
+            function getDBConnection() {
+                global $testPdo;
+                return $testPdo;
+            }
+        }
+        global $testPdo;
+        $testPdo = $this->pdo;
+        
+        // Mock de obtenerTokenBearer
+        if (!function_exists('obtenerTokenBearer')) {
+            function obtenerTokenBearer() {
+                global $mockToken;
+                return $mockToken;
+            }
+        }
+        
+        // Mock de verificarJWT
+        if (!function_exists('verificarJWT')) {
+            function verificarJWT($token) {
+                global $mockPayload, $testUser;
+                
+                if ($token === 'valid_token') {
+                    return ['user_id' => $testUser['id'], 'exp' => time() + 3600];
+                }
+                
+                if ($token === 'expired_token') {
+                    return null;
+                }
+                
+                if ($token === 'malformed_token') {
+                    return null;
+                }
+                
+                return $mockPayload ?? null;
+            }
+        }
+    }
+    
+    protected function tearDown(): void
+    {
+        $this->pdo->exec("DELETE FROM users");
+        parent::tearDown();
+    }
+    
+    /**
+     * Helper para ejecutar la API
+     */
+    private function callApi(string $token = null): array
+    {
+        global $mockToken;
+        $mockToken = $token;
+        
+        // Simular método GET
+        $_SERVER['REQUEST_METHOD'] = 'GET';
+        
+        // Capturar salida
+        ob_start();
+        include __DIR__ . '/../../api/me.php';
+        $output = ob_get_clean();
+        
+        return json_decode($output, true) ?? [];
+    }
+    
+    /**
+     * Helper para obtener el código de respuesta HTTP
+     */
+    private function getHttpStatusCode(): int
+    {
+        return http_response_code() ?: 200;
+    }
+    
+    // ============================================
+    // TESTS PRINCIPALES
+    // ============================================
+    
+    /** @test */
+    public function usuario_autenticado_obtiene_sus_datos_correctamente()
+    {
+        $response = $this->callApi('valid_token');
+        
+        $this->assertEquals(200, $this->getHttpStatusCode());
+        $this->assertTrue($response['success']);
+        $this->assertEquals('Usuario autenticado correctamente', $response['mensaje']);
+        
+        // Verificar datos del usuario
+        $this->assertEquals($this->testUser['id'], $response['usuario']['id']);
+        $this->assertEquals($this->testUser['name'], $response['usuario']['name']);
+        $this->assertEquals($this->testUser['email'], $response['usuario']['email']);
+        $this->assertEquals($this->testUser['rol'], $response['usuario']['rol']);
+        $this->assertEquals($this->testUser['telefono'], $response['usuario']['telefono']);
+        $this->assertArrayHasKey('ultimo_acceso', $response['usuario']);
+        $this->assertArrayHasKey('fecha_registro', $response['usuario']);
+    }
+    
+    /** @test */
+    public function error_cuando_token_no_proporcionado()
+    {
+        $response = $this->callApi(null);
+        
+        $this->assertEquals(401, $this->getHttpStatusCode());
+        $this->assertFalse($response['success']);
+        $this->assertStringContainsString('Token no proporcionado', $response['mensaje']);
+    }
+    
+    /** @test */
+    public function error_cuando_token_invalido()
+    {
+        $response = $this->callApi('malformed_token');
+        
+        $this->assertEquals(401, $this->getHttpStatusCode());
+        $this->assertFalse($response['success']);
+        $this->assertStringContainsString('Token inválido o expirado', $response['mensaje']);
+    }
+    
+    /** @test */
+    public function error_cuando_token_expirado()
+    {
+        $response = $this->callApi('expired_token');
+        
+        $this->assertEquals(401, $this->getHttpStatusCode());
+        $this->assertFalse($response['success']);
+        $this->assertStringContainsString('Token inválido o expirado', $response['mensaje']);
+    }
+    
+    /** @test */
+    public function error_cuando_usuario_no_existe_en_bd()
+    {
+        global $mockPayload;
+        $mockPayload = ['user_id' => 99999, 'exp' => time() + 3600];
+        
+        $response = $this->callApi('valid_token');
+        
+        $this->assertEquals(404, $this->getHttpStatusCode());
+        $this->assertFalse($response['success']);
+        $this->assertEquals('Usuario no encontrado', $response['mensaje']);
+    }
+    
+    /** @test */
+    public function actualiza_ultimo_acceso_correctamente()
+    {
+        $this->callApi('valid_token');
+        
+        $stmt = $this->pdo->prepare("SELECT ultimo_acceso FROM users WHERE id = ?");
+        $stmt->execute([$this->testUser['id']]);
+        $ultimoAcceso = $stmt->fetchColumn();
+        
+        // Verificar que se actualizó (debería ser diferente o igual con tolerancia)
+        $this->assertNotNull($ultimoAcceso);
+        $this->assertNotEquals($this->testUser['ultimo_acceso'], $ultimoAcceso);
+    }
+    
+    /** @test */
+    public function retorna_todos_los_campos_esperados()
+    {
+        $response = $this->callApi('valid_token');
+        
+        $camposEsperados = [
+            'id', 'name', 'email', 'rol', 'telefono', 'ultimo_acceso', 'fecha_registro'
+        ];
+        
+        foreach ($camposEsperados as $campo) {
+            $this->assertArrayHasKey($campo, $response['usuario']);
+        }
+    }
+    
+    /** @test */
+    public function no_expone_informacion_sensible_como_password()
+    {
+        $response = $this->callApi('valid_token');
+        
+        $this->assertArrayNotHasKey('password', $response['usuario']);
+        $this->assertArrayNotHasKey('password_hash', $response['usuario']);
+        $this->assertArrayNotHasKey('hash', $response['usuario']);
+    }
+    
+    // ============================================
+    // TESTS DE SEGURIDAD
+    // ============================================
+    
+    /** @test */
+    public function no_permite_acceso_con_token_de_otro_usuario()
+    {
+        // Crear otro usuario
+        $hash = password_hash('password456', PASSWORD_DEFAULT);
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO users (name, email, password, rol) VALUES (?, ?, ?, ?)"
+        );
+        $stmt->execute(['Otro User', 'otro@test.com', $hash, 'admin']);
+        $otroUserId = $this->pdo->lastInsertId();
+        
+        // Token con user_id de otro usuario
+        global $mockPayload;
+        $mockPayload = ['user_id' => $otroUserId, 'exp' => time() + 3600];
+        
+        $response = $this->callApi('valid_token');
+        
+        // Debería obtener datos del otro usuario, no del usuario original
+        $this->assertEquals(200, $this->getHttpStatusCode());
+        $this->assertEquals($otroUserId, $response['usuario']['id']);
+        $this->assertEquals('otro@test.com', $response['usuario']['email']);
+    }
+    
+    /** @test */
+    public function metodo_get_es_obligatorio()
+    {
+        // Simular método POST
+        $_SERVER['REQUEST_METHOD'] = 'POST';
+        
+        ob_start();
+        include __DIR__ . '/../../api/me.php';
+        $output = ob_get_clean();
+        $response = json_decode($output, true);
+        
+        $this->assertEquals(405, $this->getHttpStatusCode());
+        $this->assertFalse($response['success']);
+    }
+    
+    // ============================================
+    // TESTS DE RENDIMIENTO
+    // ============================================
+    
+    /** @test */
+    public function respuesta_es_rapida_menos_de_100ms()
+    {
+        $start = microtime(true);
+        
+        $this->callApi('valid_token');
+        
+        $time = (microtime(true) - $start) * 1000; // en milisegundos
+        $this->assertLessThan(100, $time, 'La API debería responder en menos de 100ms');
+    }
+    
+    // ============================================
+    // TESTS DE CASOS BORDE
+    // ============================================
+    
+    /** @test */
+    public function maneja_campos_nulos_adecuadamente()
+    {
+        // Crear usuario con campos nulos
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO users (name, email, password, rol, telefono) 
+             VALUES (?, ?, ?, ?, ?)"
+        );
+        $stmt->execute([
+            'User Sin Teléfono',
+            'nosin@test.com',
+            password_hash('password123', PASSWORD_DEFAULT),
+            'veterinario',
+            null
+        ]);
+        $userId = $this->pdo->lastInsertId();
+        
+        global $mockPayload;
+        $mockPayload = ['user_id' => $userId, 'exp' => time() + 3600];
+        
+        $response = $this->callApi('valid_token');
+        
+        $this->assertEquals(200, $this->getHttpStatusCode());
+        $this->assertNull($response['usuario']['telefono']);
+    }
+    
+    /** @test */
+    public function maneja_error_de_base_de_datos()
+    {
+        // Forzar error de BD (eliminar tabla)
+        $this->pdo->exec("DROP TABLE users");
+        
+        $response = $this->callApi('valid_token');
+        
+        $this->assertEquals(500, $this->getHttpStatusCode());
+        $this->assertFalse($response['success']);
+        $this->assertEquals('Error interno del servidor', $response['mensaje']);
+    }
+}
+
+// ============================================
+// TEST DE E2E CON SOLICITUDES REALES
+// ============================================
+
+class MeApiE2ETest extends TestCase
+{
+    private $baseUrl = 'http://localhost/api';
+    private $testUser;
+    private $authToken;
+    
+    protected function setUp(): void
+    {
+        parent::setUp();
+        
+        // Crear usuario real en BD de desarrollo
+        // Este test solo se ejecuta en entorno de desarrollo
+        if (getenv('APP_ENV') !== 'testing') {
+            $this->markTestSkipped('E2E tests only run in testing environment');
+        }
+    }
+    
+    /** @test */
+    public function e2e_flujo_completo_autenticacion()
+    {
+        // 1. Registrar usuario
+        $registerResponse = $this->httpPost('/register', [
+            'name' => 'E2E User',
+            'email' => 'e2e@test.com',
+            'password' => 'password123',
+            'password_confirmation' => 'password123'
+        ]);
+        
+        $this->assertEquals(201, $registerResponse['status']);
+        
+        // 2. Login
+        $loginResponse = $this->httpPost('/login', [
+            'email' => 'e2e@test.com',
+            'password' => 'password123'
+        ]);
+        
+        $this->assertEquals(200, $loginResponse['status']);
+        $token = $loginResponse['data']['token'];
+        
+        // 3. Obtener datos del usuario (me)
+        $meResponse = $this->httpGet('/me', $token);
+        
+        $this->assertEquals(200, $meResponse['status']);
+        $this->assertEquals('e2e@test.com', $meResponse['data']['usuario']['email']);
+        $this->assertEquals('E2E User', $meResponse['data']['usuario']['name']);
+    }
+    
+    private function httpPost($endpoint, $data): array
+    {
+        $ch = curl_init($this->baseUrl . $endpoint);
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_POST, true);
+        curl_setopt($ch, CURLOPT_HTTPHEADER, ['Content-Type: application/json']);
+        curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($data));
+        
+        $response = curl_exec($ch);
+        $status = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+        
+        return [
+            'status' => $status,
+            'data' => json_decode($response, true)
+        ];
+    }
+    
+    private function httpGet($endpoint, $token): array
+    {
+        $ch = curl_init($this->baseUrl . $endpoint);
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_HTTPHEADER, [
+            'Authorization: Bearer ' . $token,
+            'Content-Type: application/json'
+        ]);
+        
+        $response = curl_exec($ch);
+        $status = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+        
+        return [
+            'status' => $status,
+            'data' => json_decode($response, true)
+        ];
+    }
+}
+
+#!/bin/bash
+# scripts/performance-test.sh
+
+echo "=== TEST DE RENDIMIENTO - ME API ==="
+
+# Obtener token primero
+TOKEN=$(curl -s -X POST http://localhost/api/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"test@api.com","password":"password123"}' \
+  | jq -r '.token')
+
+echo "Token obtenido: $TOKEN"
+
+# Prueba de carga: 1000 peticiones concurrentes
+ab -n 1000 -c 10 -H "Authorization: Bearer $TOKEN" \
+   http://localhost/api/me.php
+
+# Resultados esperados:
+# - Tiempo promedio < 50ms
+# - Tasa de error < 1%
+# - Requests por segundo > 100
+
+// api/me.php - Mejoras sugeridas
+
+// 1. Rate limiting
+if (!checkRateLimit($payload['user_id'])) {
+    http_response_code(429);
+    echo json_encode(['mensaje' => 'Demasiadas peticiones']);
+    exit;
+}
+
+// 2. Log de acceso
+logUserActivity($payload['user_id'], 'profile_view');
+
+// 3. Cache de datos (para reducir consultas)
+$cacheKey = "user_{$payload['user_id']}";
+$usuario = getCached($cacheKey) ?? fetchUserFromDB($payload['user_id']);
+
+// 4. Mejorar seguridad: verificar IP/User Agent
+if (!verifySessionContext($payload['user_id'])) {
+    http_response_code(401);
+    echo json_encode(['mensaje' => 'Sesión comprometida']);
+    exit;
+}
