@@ -1,0 +1,265 @@
+<?php
+// tests/Integration/VerifyTokenApiTest.php
+
+use PHPUnit\Framework\TestCase;
+
+class VerifyTokenApiTest extends TestCase
+{
+    private $pdo;
+    private $jwtSecret = 'test_secret_key_12345';
+    private $testUser;
+    
+    protected function setUp(): void
+    {
+        parent::setUp();
+        
+        // 1. BD en memoria para tests
+        $this->pdo = new PDO('sqlite::memory:');
+        $this->pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+        
+        // 2. Estructura de la tabla users (completa)
+        $this->pdo->exec("
+            CREATE TABLE users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                email TEXT UNIQUE NOT NULL,
+                password TEXT NOT NULL,
+                rol TEXT DEFAULT 'veterinario',
+                telefono TEXT,
+                ultimo_acceso DATETIME,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        ");
+        
+        // 3. Crear usuario de prueba
+        $hash = password_hash('123456', PASSWORD_DEFAULT);
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO users (name, email, password, rol, ultimo_acceso) 
+             VALUES (?, ?, ?, ?, ?)"
+        );
+        $stmt->execute([
+            'Test User',
+            'test@api.com',
+            $hash,
+            'veterinario',
+            date('Y-m-d H:i:s')
+        ]);
+        $this->testUser['id'] = $this->pdo->lastInsertId();
+        $this->testUser['email'] = 'test@api.com';
+        $this->testUser['name'] = 'Test User';
+        
+        // 4. Sobrescribir funciones globales
+        $this->mockGlobalFunctions();
+    }
+    
+    private function mockGlobalFunctions(): void
+    {
+        // Mock de getDBConnection
+        if (!function_exists('getDBConnection')) {
+            function getDBConnection() {
+                global $testPdo;
+                return $testPdo;
+            }
+        }
+        global $testPdo;
+        $testPdo = $this->pdo;
+        
+        // Mock de JWT functions
+        if (!function_exists('obtenerTokenBearer')) {
+            function obtenerTokenBearer() {
+                global $mockToken;
+                return $mockToken;
+            }
+        }
+        
+        if (!function_exists('verificarJWT')) {
+            function verificarJWT($token) {
+                global $jwtSecret, $mockPayload;
+                // Simular verificación JWT
+                if ($token === 'valid_token_' . $GLOBALS['testUser']['id']) {
+                    return ['user_id' => $GLOBALS['testUser']['id'], 'exp' => time() + 3600, 'iat' => time()];
+                }
+                if ($token === 'expired_token') {
+                    return null; // Token expirado
+                }
+                if ($token === 'malformed_token') {
+                    return null; // Token inválido
+                }
+                return $mockPayload ?? null;
+            }
+        }
+    }
+    
+    protected function tearDown(): void
+    {
+        $this->pdo->exec("DELETE FROM users");
+        parent::tearDown();
+    }
+    
+    /**
+     * Helper para ejecutar la API
+     */
+    private function callApi(string $token = null): array
+    {
+        global $mockToken;
+        $mockToken = $token;
+        
+        ob_start();
+        
+        // Simular headers
+        $_SERVER['REQUEST_METHOD'] = 'GET';
+        if ($token) {
+            $_SERVER['HTTP_AUTHORIZATION'] = 'Bearer ' . $token;
+        }
+        
+        include __DIR__ . '/../../api/verify-token.php';
+        
+        $output = ob_get_clean();
+        return json_decode($output, true) ?? [];
+    }
+    
+    /** @test */
+    public function token_valido_retorna_datos_usuario()
+    {
+        $token = 'valid_token_' . $this->testUser['id'];
+        $response = $this->callApi($token);
+        
+        $this->assertEquals(200, http_response_code());
+        $this->assertTrue($response['success']);
+        $this->assertTrue($response['valid']);
+        $this->assertEquals('Token válido', $response['mensaje']);
+        
+        // Verificar datos del usuario
+        $this->assertEquals($this->testUser['id'], $response['usuario']['id']);
+        $this->assertEquals($this->testUser['name'], $response['usuario']['name']);
+        $this->assertEquals($this->testUser['email'], $response['usuario']['email']);
+        $this->assertEquals('veterinario', $response['usuario']['rol']);
+        $this->assertArrayHasKey('ultimo_acceso', $response['usuario']);
+        
+        // Verificar datos del token
+        $this->assertArrayHasKey('token', $response);
+        $this->assertArrayHasKey('expira_en', $response['token']);
+        $this->assertArrayHasKey('expira_en_horas', $response['token']);
+        $this->assertArrayHasKey('expira_en_fecha', $response['token']);
+        $this->assertArrayHasKey('emitido_en', $response['token']);
+    }
+    
+    /** @test */
+    public function error_cuando_token_no_proporcionado()
+    {
+        $response = $this->callApi(null);
+        
+        $this->assertEquals(401, http_response_code());
+        $this->assertFalse($response['success']);
+        $this->assertFalse($response['valid']);
+        $this->assertEquals('Token no proporcionado', $response['mensaje']);
+        $this->assertEquals('MISSING_TOKEN', $response['error']);
+    }
+    
+    /** @test */
+    public function error_cuando_token_invalido()
+    {
+        $response = $this->callApi('malformed_token');
+        
+        $this->assertEquals(401, http_response_code());
+        $this->assertFalse($response['success']);
+        $this->assertFalse($response['valid']);
+        $this->assertEquals('Token inválido o expirado', $response['mensaje']);
+        $this->assertEquals('INVALID_TOKEN', $response['error']);
+    }
+    
+    /** @test */
+    public function error_cuando_token_expirado()
+    {
+        $response = $this->callApi('expired_token');
+        
+        $this->assertEquals(401, http_response_code());
+        $this->assertFalse($response['success']);
+        $this->assertFalse($response['valid']);
+        $this->assertEquals('Token inválido o expirado', $response['mensaje']);
+        $this->assertEquals('INVALID_TOKEN', $response['error']);
+    }
+    
+    /** @test */
+    public function error_cuando_usuario_no_existe_en_bd()
+    {
+        global $mockPayload;
+        $mockPayload = ['user_id' => 99999, 'exp' => time() + 3600];
+        
+        $response = $this->callApi('valid_token_99999');
+        
+        $this->assertEquals(404, http_response_code());
+        $this->assertFalse($response['success']);
+        $this->assertFalse($response['valid']);
+        $this->assertEquals('Usuario no encontrado en el sistema', $response['mensaje']);
+        $this->assertEquals('USER_NOT_FOUND', $response['error']);
+    }
+    
+    /** @test */
+    public function metodo_options_retorna_200()
+    {
+        $_SERVER['REQUEST_METHOD'] = 'OPTIONS';
+        
+        ob_start();
+        include __DIR__ . '/../../api/verify-token.php';
+        $output = ob_get_clean();
+        
+        $this->assertEquals(200, http_response_code());
+        $this->assertEmpty($output);
+    }
+    
+    /** @test */
+    public function calcula_correctamente_tiempo_restante_del_token()
+    {
+        $token = 'valid_token_' . $this->testUser['id'];
+        $response = $this->callApi($token);
+        
+        // El token expira en 1 hora (3600 segundos)
+        $this->assertGreaterThan(3500, $response['token']['expira_en']);
+        $this->assertLessThan(3600, $response['token']['expira_en']);
+        $this->assertEquals(1.0, $response['token']['expira_en_horas']);
+    }
+    
+    /** @test */
+    public function token_retorna_todas_las_propiedades_esperadas()
+    {
+        $token = 'valid_token_' . $this->testUser['id'];
+        $response = $this->callApi($token);
+        
+        $propiedadesEsperadas = [
+            'success', 'valid', 'mensaje', 'usuario', 'token'
+        ];
+        
+        foreach ($propiedadesEsperadas as $prop) {
+            $this->assertArrayHasKey($prop, $response);
+        }
+        
+        $propiedadesUsuario = ['id', 'name', 'email', 'rol', 'ultimo_acceso'];
+        foreach ($propiedadesUsuario as $prop) {
+            $this->assertArrayHasKey($prop, $response['usuario']);
+        }
+        
+        $propiedadesToken = ['expira_en', 'expira_en_horas', 'expira_en_fecha', 'emitido_en'];
+        foreach ($propiedadesToken as $prop) {
+            $this->assertArrayHasKey($prop, $response['token']);
+        }
+    }
+}
+
+// Agregar en jwt_helper.php
+
+function verificarJWT($token) {
+    // ... código existente ...
+    
+    // Mejora 1: Validar que el token no haya sido revocado
+    if (tokenEstaRevocado($payload['user_id'], $payload['iat'])) {
+        return null;
+    }
+    
+    // Mejora 2: Verificar versión del token (para rotación de claves)
+    if (isset($payload['version']) && $payload['version'] < TOKEN_VERSION) {
+        return null;
+    }
+    
+    return $payload;
+}
