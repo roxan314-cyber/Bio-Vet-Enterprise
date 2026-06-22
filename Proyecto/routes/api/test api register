@@ -1,0 +1,205 @@
+<?php
+// tests/Integration/RegisterApiTest.php
+
+use PHPUnit\Framework\TestCase;
+
+class RegisterApiTest extends TestCase
+{
+    private $pdo;
+    private $baseUrl = 'http://localhost/api/register.php';
+    
+    protected function setUp(): void
+    {
+        parent::setUp();
+        
+        // 1. Crear BD en memoria para tests
+        $this->pdo = new PDO('sqlite::memory:');
+        $this->pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+        
+        // 2. Crear estructura de la tabla
+        $this->pdo->exec("
+            CREATE TABLE users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                email TEXT UNIQUE NOT NULL,
+                password TEXT NOT NULL,
+                rol TEXT DEFAULT 'veterinario',
+                telefono TEXT
+            )
+        ");
+        
+        // 3. Sobrescribir la función getDBConnection() para usar test DB
+        // (Usamos mock de la función global)
+        if (!function_exists('getDBConnection')) {
+            function getDBConnection() {
+                global $testPdo;
+                return $testPdo;
+            }
+        }
+        global $testPdo;
+        $testPdo = $this->pdo;
+    }
+    
+    protected function tearDown(): void
+    {
+        // Limpiar la BD después de cada test
+        $this->pdo->exec("DELETE FROM users");
+        parent::tearDown();
+    }
+    
+    /**
+     * Método helper para hacer requests a la API
+     */
+    private function makeRequest(array $data, string $method = 'POST'): array
+    {
+        // Capturar la salida del script
+        ob_start();
+        
+        // Simular variables de servidor
+        $_SERVER['REQUEST_METHOD'] = $method;
+        $_SERVER['CONTENT_TYPE'] = 'application/json';
+        
+        // Incluir el script de la API
+        include __DIR__ . '/../../api/register.php';
+        
+        $output = ob_get_clean();
+        
+        // Decodificar respuesta
+        return json_decode($output, true) ?? [];
+    }
+    
+    /** @test */
+    public function registro_exitoso_con_datos_validos()
+    {
+        $data = [
+            'name' => 'Juan Pérez',
+            'email' => 'juan@test.com',
+            'password' => '123456',
+            'password_confirmation' => '123456',
+            'rol' => 'admin',
+            'telefono' => '123456789'
+        ];
+        
+        $response = $this->makeRequest($data);
+        
+        $this->assertEquals(201, http_response_code());
+        $this->assertTrue($response['success']);
+        $this->assertEquals('Usuario registrado exitosamente', $response['mensaje']);
+        $this->assertEquals('Juan Pérez', $response['usuario']['name']);
+        $this->assertEquals('juan@test.com', $response['usuario']['email']);
+        $this->assertArrayHasKey('id', $response['usuario']);
+        
+        // Verificar en BD
+        $stmt = $this->pdo->query("SELECT * FROM users WHERE email = 'juan@test.com'");
+        $user = $stmt->fetch(PDO::FETCH_ASSOC);
+        
+        $this->assertNotNull($user);
+        $this->assertEquals('Juan Pérez', $user['name']);
+        $this->assertEquals('admin', $user['rol']);
+        $this->assertTrue(password_verify('123456', $user['password']));
+    }
+    
+    /** @test */
+    public function error_cuando_email_ya_existe()
+    {
+        // Insertar usuario existente
+        $hash = password_hash('123456', PASSWORD_DEFAULT);
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO users (name, email, password, rol) VALUES (?, ?, ?, ?)"
+        );
+        $stmt->execute(['Usuario Existente', 'existente@test.com', $hash, 'veterinario']);
+        
+        $data = [
+            'name' => 'Nuevo Usuario',
+            'email' => 'existente@test.com', // Email duplicado
+            'password' => '123456',
+            'password_confirmation' => '123456'
+        ];
+        
+        $response = $this->makeRequest($data);
+        
+        $this->assertEquals(409, http_response_code());
+        $this->assertFalse($response['success']);
+        $this->assertEquals('El email ya está registrado', $response['mensaje']);
+    }
+    
+    /** @test */
+    public function error_campos_requeridos_vacios()
+    {
+        $data = [
+            'name' => '',
+            'email' => 'correo-invalido',
+            'password' => '123',
+            'password_confirmation' => '456'
+        ];
+        
+        $response = $this->makeRequest($data);
+        
+        $this->assertEquals(400, http_response_code());
+        $this->assertFalse($response['success']);
+        $this->assertArrayHasKey('name', $response['errors']);
+        $this->assertArrayHasKey('email', $response['errors']);
+        $this->assertArrayHasKey('password', $response['errors']);
+        $this->assertArrayHasKey('password_confirmation', $response['errors']);
+        
+        $this->assertEquals('El nombre es requerido', $response['errors']['name']);
+        $this->assertEquals('Email válido es requerido', $response['errors']['email']);
+        $this->assertEquals('La contraseña debe tener al menos 6 caracteres', $response['errors']['password']);
+        $this->assertEquals('Las contraseñas no coinciden', $response['errors']['password_confirmation']);
+    }
+    
+    /** @test */
+    public function error_metodo_no_permitido()
+    {
+        // Simular GET en lugar de POST
+        $response = $this->makeRequest([], 'GET');
+        
+        $this->assertEquals(405, http_response_code());
+        $this->assertFalse($response['success']);
+        $this->assertEquals('Método no permitido', $response['mensaje']);
+    }
+    
+    /** @test */
+    public function rol_por_defecto_veterinario_cuando_no_se_envia()
+    {
+        $data = [
+            'name' => 'María López',
+            'email' => 'maria@test.com',
+            'password' => '123456',
+            'password_confirmation' => '123456'
+            // No enviamos 'rol'
+        ];
+        
+        $response = $this->makeRequest($data);
+        
+        $this->assertEquals(201, http_response_code());
+        $this->assertTrue($response['success']);
+        
+        // Verificar en BD que rol = 'veterinario'
+        $stmt = $this->pdo->query("SELECT rol FROM users WHERE email = 'maria@test.com'");
+        $user = $stmt->fetch(PDO::FETCH_ASSOC);
+        $this->assertEquals('veterinario', $user['rol']);
+    }
+    
+    /** @test */
+    public function campos_extras_se_ignoran_permitidos()
+    {
+        $data = [
+            'name' => 'Carlos Ruiz',
+            'email' => 'carlos@test.com',
+            'password' => '123456',
+            'password_confirmation' => '123456',
+            'campo_extra' => 'esto-debe-ignorarse' // Campo no esperado
+        ];
+        
+        $response = $this->makeRequest($data);
+        
+        $this->assertEquals(201, http_response_code());
+        $this->assertTrue($response['success']);
+        
+        // Verificar que no se guardó el campo extra
+        $stmt = $this->pdo->query("SELECT * FROM users WHERE email = 'carlos@test.com'");
+        $columns = array_keys($stmt->fetch(PDO::FETCH_ASSOC));
+        $this->assertNotContains('campo_extra', $columns);
+    }
+}
