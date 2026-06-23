@@ -1,0 +1,152 @@
+<?php
+return [
+    'mysql' => [
+        'dsn'   => 'mysql:host=localhost;dbname=api_db;charset=utf8mb4',
+        'user'  => 'root',
+        'pass'  => 'secret'
+    ],
+    'redis' => [
+        'host' => '127.0.0.1',
+        'port' => 6379
+    ]
+];
+
+<?php
+namespace Core;
+
+use PDO;
+use Redis;
+
+class Database {
+    private static $instances = [];
+
+    public static function getMySQL(): PDO {
+        if (!isset(self::$instances['mysql'])) {
+            $config = require __DIR__ . '/../config/database.php';
+            $db = $config['mysql'];
+            self::$instances['mysql'] = new PDO($db['dsn'], $db['user'], $db['pass']);
+            self::$instances['mysql']->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+        }
+        return self::$instances['mysql'];
+    }
+
+    public static function getRedis(): Redis {
+        if (!isset(self::$instances['redis'])) {
+            $config = require __DIR__ . '/../config/database.php';
+            $redis = new Redis();
+            $redis->connect($config['redis']['host'], $config['redis']['port']);
+            self::$instances['redis'] = $redis;
+        }
+        return self::$instances['redis'];
+    }
+}
+
+<?php
+namespace Core;
+
+class Router {
+    private $routes = [];
+
+    public function add($method, $path, $controller, $action) {
+        $this->routes[] = compact('method', 'path', 'controller', 'action');
+    }
+
+    public function dispatch(Request $request): Response {
+        $path = $request->getPath();
+        $method = $request->getMethod();
+
+        foreach ($this->routes as $route) {
+            if ($route['method'] === $method && $route['path'] === $path) {
+                $ctrl = new $route['controller']();
+                return $ctrl->{$route['action']}($request);
+            }
+        }
+        return new Response(404, ['error' => 'Not found']);
+    }
+}
+
+<?php
+namespace Controllers;
+
+use Core\Request;
+use Core\Response;
+use Repositories\UserRepository;
+
+class UserController {
+    public function get(Request $req): Response {
+        $id = $req->getParam('id');
+        $data = UserRepository::find($id);
+        return new Response(200, $data);
+    }
+
+    public function create(Request $req): Response {
+        $body = $req->getBody();
+        $id = UserRepository::create($body);
+        return new Response(201, ['id' => $id]);
+    }
+}
+
+// test
+
+<?php
+namespace Repositories;
+
+use Core\Database;
+
+class UserRepository {
+    public static function find($id) {
+        $pdo = Database::getMySQL();
+        $stmt = $pdo->prepare("SELECT * FROM users WHERE id = ?");
+        $stmt->execute([$id]);
+        $user = $stmt->fetch();
+
+        if ($user) {
+            $redis = Database::getRedis();
+            $redis->set("user:$id", json_encode($user));
+        }
+        return $user;
+    }
+
+    public static function create($data) {
+        $pdo = Database::getMySQL();
+        $stmt = $pdo->prepare("INSERT INTO users (name, email) VALUES (?, ?)");
+        $stmt->execute([$data['name'], $data['email']]);
+        return $pdo->lastInsertId();
+    }
+}
+
+<?php
+use PHPUnit\Framework\TestCase;
+use Core\Request;
+use Controllers\UserController;
+
+class UserControllerTest extends TestCase {
+    public function testGetUser() {
+        $req = $this->createMock(Request::class);
+        $req->method('getParam')->willReturn(1);
+
+        $ctrl = new UserController();
+        $res = $ctrl->get($req);
+
+        $this->assertEquals(200, $res->statusCode);
+        $this->assertArrayHasKey('id', $res->data);
+    }
+}
+
+// Fronted básico 
+
+<!DOCTYPE html>
+<html>
+<body>
+    <h1>API REST - Biovet Test</h1>
+    <button onclick="fetch('/api/users/1').then(r=>r.json()).then(console.log)">Get User</button>
+    <script>
+        // POST ejemplo
+        fetch('/api/users', {
+            method: 'POST',
+            headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({name:'Juan', email:'juan@biovet.com'})
+        });
+    </script>
+</body>
+</html>
