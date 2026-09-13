@@ -11,7 +11,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const username = document.getElementById('username').value;
 
-        // Simulación de validación (puedes reemplazar esto con una llamada a tu backend)
+        // Simulación de validación
         setTimeout(() => {
             alert(`Bienvenido, ${username}!`);
 
@@ -19,7 +19,7 @@ document.addEventListener('DOMContentLoaded', () => {
             submitBtn.innerText = 'Iniciar Sesión';
             submitBtn.disabled = false;
 
-            // Aquí puedes redirigir al usuario a otra página o realizar otras acciones
+            // Redirige al usuario a otra página o realizar otras acciones
             loginForm.reset();
         }, 2000);
     });
